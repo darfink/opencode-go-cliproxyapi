@@ -206,6 +206,23 @@ func claudeToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSuppo
 			if msg != nil {
 				out.Messages = append(out.Messages, *msg)
 			}
+		case "system":
+			var sb strings.Builder
+			sb.WriteString(m.Content)
+			for i := range m.Blocks {
+				blk := &m.Blocks[i]
+				switch blk.Kind {
+				case "text":
+					sb.WriteString(blk.Text)
+				case "image":
+					return nil, shared.SystemImageRejected()
+				default:
+					return nil, shared.UnsupportedPartType(blk.Kind, EndpointPath)
+				}
+			}
+			if sb.Len() > 0 {
+				out.Messages = append(out.Messages, ccMessage{Role: "system", Content: sb.String()})
+			}
 		default:
 			return nil, shared.ValidateRole(m.Role, EndpointPath)
 		}

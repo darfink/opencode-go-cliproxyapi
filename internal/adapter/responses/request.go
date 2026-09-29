@@ -324,6 +324,31 @@ func fromClaudeMessages(upstreamModel string, body []byte, ts *pluginapi.Thinkin
 	req.Instructions = src.System
 
 	for _, m := range src.Messages {
+		if m.Role == "system" {
+			text := m.Content
+			for _, blk := range m.Blocks {
+				switch blk.Kind {
+				case "text":
+					if text != "" {
+						text += "\n\n"
+					}
+					text += blk.Text
+				case "image":
+					return nil, shared.SystemImageRejected()
+				case "thinking", "redacted_thinking":
+					// omitted per the FR-005 policy in the doc comment
+				default:
+					return nil, shared.UnsupportedPartType(blk.Kind, EndpointPath)
+				}
+			}
+			if text != "" {
+				if req.Instructions != "" {
+					req.Instructions += "\n\n"
+				}
+				req.Instructions += text
+			}
+			continue
+		}
 		switch m.Role {
 		case "user", "assistant":
 		default:

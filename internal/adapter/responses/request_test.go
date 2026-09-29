@@ -497,20 +497,29 @@ func TestFromClaudeMessagesAbsentSystemAndNullContent(t *testing.T) {
 // naming the endpoint, exactly like every other translator leg — never
 // forwarded verbatim upstream.
 func TestClaudeUnknownRoleRejected(t *testing.T) {
-	body := []byte(`{"max_tokens":10,"messages":[` +
-		`{"role":"user","content":"hi"},{"role":"system","content":"mid-history"}]}`)
-	_, eErr := BuildRequest("m", "claude", body, nil)
-	if eErr == nil || eErr.Class != errclass.ClassUnsupported ||
-		eErr.Message != `unsupported message role "system" for /v1/responses` {
-		t.Fatalf("mid-history system = %+v", eErr)
-	}
-
-	_, eErr = BuildRequest("m", "claude",
+	_, eErr := BuildRequest("m", "claude",
 		[]byte(`{"max_tokens":10,"messages":[{"role":"robot","content":"x"}]}`), nil)
 	if eErr == nil || eErr.Class != errclass.ClassUnsupported ||
 		eErr.Message != `unsupported message role "robot" for /v1/responses` {
 		t.Fatalf("garbage role = %+v", eErr)
 	}
+}
+
+// Red reproduction: in-history role:"system" turns must convert to Responses
+// format without error (system content appended to instructions or input).
+func TestInHistorySystemRoleInClaudeMessages(t *testing.T) {
+	body := []byte(`{"max_tokens":10,"system":"top","messages":[` +
+		`{"role":"user","content":"hi"},{"role":"system","content":"mid-history"}]}`)
+	m := decodeReq(t, mustBuild(t, "m", "claude", body, nil))
+	if instr, _ := m["instructions"].(string); strings.Contains(instr, "mid-history") {
+		return
+	}
+	for _, item := range inputItems(t, m) {
+		if strings.Contains(fmt.Sprintf("%v", item), "mid-history") {
+			return
+		}
+	}
+	t.Fatalf("in-history system content lost: %v", m)
 }
 
 // FR-005 drift fix (shared.ClaudeMaxTokens): an absent or non-positive
