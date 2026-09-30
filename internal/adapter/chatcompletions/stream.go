@@ -42,6 +42,7 @@ type StreamConverter struct {
 	terminalSent bool            // claudeTerminal already emitted message_delta (Flush must still close with message_stop)
 	flushed      bool            // Flush already ran (one-shot guard)
 	respText     strings.Builder // openai-response accumulated output_text
+	respTools    *shared.ResponseTools
 }
 
 // streamTool accumulates one upstream tool_calls index; args collects
@@ -57,12 +58,16 @@ type streamTool struct {
 
 // NewStreamConverter returns a converter translating Chat Completions
 // SSE into sourceFormat's stream shape.
-func NewStreamConverter(sourceFormat string) *StreamConverter {
-	return &StreamConverter{
+func NewStreamConverter(sourceFormat string, tools ...*shared.ResponseTools) *StreamConverter {
+	sc := &StreamConverter{
 		sourceFormat: sourceFormat,
 		msgIndex:     -1,
 		tools:        map[int64]*streamTool{},
 	}
+	if len(tools) > 0 && tools[0] != nil {
+		sc.respTools = tools[0]
+	}
+	return sc
 }
 
 // Feed consumes one upstream chunk (any split of the byte stream),
@@ -487,7 +492,7 @@ func (sc *StreamConverter) responsesLine(line string) ([][]byte, *errclass.Error
 // upstream chunk identity so this route's frames cannot diverge from the
 // sibling Messages-route synthesizer (FR-006).
 func (sc *StreamConverter) responsesEm() shared.ResponsesEventEmitter {
-	return shared.ResponsesEventEmitter{ID: sc.id, Model: sc.model}
+	return shared.ResponsesEventEmitter{ID: sc.id, Model: sc.model, Tools: sc.respTools}
 }
 
 // responsesTerminal renders the held response.completed exactly once,
@@ -509,7 +514,7 @@ func (sc *StreamConverter) responsesTerminal() [][]byte {
 	// tools-first announcements), never displacing already-announced
 	// function_call items; this mirrors the Messages-route invariant that
 	// terminal output order equals announcement order (W4 pin).
-	oa := shared.NewOutputAssembler(sc.id)
+	oa := shared.NewOutputAssembler(sc.id, sc.respTools)
 	reserved := false
 	for _, idx := range sc.toolOrder {
 		t := sc.tools[idx]

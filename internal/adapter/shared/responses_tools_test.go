@@ -1,0 +1,303 @@
+package shared
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func reqWithInput(t *testing.T, input any, tools []RespTool, toolChoice any) *ResponsesRequest {
+	t.Helper()
+	r := &ResponsesRequest{Tools: tools}
+	if input != nil {
+		b, err := json.Marshal(input)
+		if err != nil {
+			t.Fatalf("marshal input: %v", err)
+		}
+		r.Input = b
+	}
+	if toolChoice != nil {
+		switch tc := toolChoice.(type) {
+		case string:
+			r.ToolChoice = json.RawMessage(tc)
+		default:
+			b, err := json.Marshal(tc)
+			if err != nil {
+				t.Fatalf("marshal tool_choice: %v", err)
+			}
+			r.ToolChoice = b
+		}
+	}
+	return r
+}
+
+func TestIdentity(t *testing.T) {
+	var nilTools *ResponseTools
+	if got := nilTools.Identity("fn"); got != (responseToolIdentity{name: "fn"}) {
+		t.Fatalf("nil registry = %+v", got)
+	}
+	rt := NewResponseTools()
+	if got := rt.Identity("unknown"); got != (responseToolIdentity{name: "unknown"}) {
+		t.Fatalf("unknown = %+v", got)
+	}
+	rt.names["ns__fn"] = responseToolIdentity{name: "fn", namespace: "ns"}
+	if got := rt.Identity("ns__fn"); got != (responseToolIdentity{name: "fn", namespace: "ns"}) {
+		t.Fatalf("known = %+v", got)
+	}
+}
+
+func TestNormalizeMergesAdditionalTools(t *testing.T) {
+	r := reqWithInput(t, []any{
+		map[string]any{"type": "additional_tools", "tools": []any{
+			map[string]any{"type": "function", "name": "extra_search"},
+		}},
+		map[string]any{"type": "message", "role": "user", "content": "hi"},
+	}, []RespTool{{Type: "function", Name: "base"}}, nil)
+	conv, eErr := NewResponseTools().Normalize(r, "/v1/responses")
+	if eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(conv) != 1 || conv[0].Type != "message" {
+		t.Fatalf("conv = %+v", conv)
+	}
+	if len(r.Tools) != 2 || r.Tools[0].Name != "base" || r.Tools[1].Name != "extra_search" {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+}
+
+func TestNormalizeAdditionalToolsErrors(t *testing.T) {
+	for name, item := range map[string]any{
+		"missing": map[string]any{"type": "additional_tools"},
+		"null":    map[string]any{"type": "additional_tools", "tools": nil},
+	} {
+		r := reqWithInput(t, []any{item}, nil, nil)
+		if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr == nil ||
+			!strings.Contains(eErr.Message, "additional_tools requires a tools array") {
+			t.Fatalf("%s: err = %v", name, eErr)
+		}
+	}
+	// Empty (non-nil) array merges zero tools without error.
+	r := reqWithInput(t, []any{map[string]any{"type": "additional_tools", "tools": []any{}}}, nil, nil)
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("empty array: %v", eErr)
+	}
+}
+
+func TestNormalizeDecodeInputError(t *testing.T) {
+	r := &ResponsesRequest{Input: json.RawMessage(`[bad`)}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr == nil {
+		t.Fatal("want decode error")
+	}
+}
+
+func TestNormalizeUnrollsNamespace(t *testing.T) {
+	r := reqWithInput(t, "hello", []RespTool{{
+		Type: "namespace", Name: "subagents",
+		Tools: []RespTool{{Type: "function", Name: "spawn_agent"}},
+	}}, nil)
+	conv, eErr := NewResponseTools().Normalize(r, "/v1/responses")
+	if eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(conv) != 1 || conv[0].Type != "message" {
+		t.Fatalf("string input conv = %+v", conv)
+	}
+	if len(r.Tools) != 1 || r.Tools[0].Name != "subagents__spawn_agent" {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+}
+
+func TestNormalizeNamespaceErrors(t *testing.T) {
+	for name, tool := range map[string]RespTool{
+		"empty name":   {Type: "namespace", Name: "  ", Tools: []RespTool{{Type: "function", Name: "f"}}},
+		"nil tools":    {Type: "namespace", Name: "ns"},
+		"non-function": {Type: "namespace", Name: "ns", Tools: []RespTool{{Type: "web_search", Name: "f"}}},
+	} {
+		r := &ResponsesRequest{Tools: []RespTool{tool}}
+		if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr == nil {
+			t.Fatalf("%s: want error", name)
+		}
+	}
+	// Empty (non-nil) namespace children: vacuous, no error.
+	r := &ResponsesRequest{Tools: []RespTool{{Type: "namespace", Name: "subagents", Tools: []RespTool{}}}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("empty children: %v", eErr)
+	}
+}
+
+// Plain top-level tools pass through untouched: namespace validation
+// applies only to namespace children; adapters validate the rest.
+func TestNormalizePlainToolsPassthrough(t *testing.T) {
+	r := &ResponsesRequest{Tools: []RespTool{
+		{Type: "function", Name: "f"},
+		{Type: "web_search", Name: "w"},
+	}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(r.Tools) != 2 {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+}
+
+func TestNormalizeTruncation(t *testing.T) {
+	ns := strings.Repeat("n", 40)
+	fn := strings.Repeat("f", 40)
+	wantFull := ns + "__" + fn
+	if len(wantFull) <= 64 {
+		t.Fatalf("fixture too short: %d", len(wantFull))
+	}
+	r := reqWithInput(t, nil, []RespTool{{
+		Type: "namespace", Name: ns, Tools: []RespTool{{Type: "function", Name: fn}},
+	}}, nil)
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	sum := sha256.Sum256([]byte(wantFull))
+	want := wantFull[:50] + "__" + hex.EncodeToString(sum[:6])
+	if len(want) != 64 {
+		t.Fatalf("want len 64, got %d", len(want))
+	}
+	if r.Tools[0].Name != want {
+		t.Fatalf("got %q want %q", r.Tools[0].Name, want)
+	}
+	// Exactly 64 chars: no truncation.
+	exact := strings.Repeat("a", 30) + "__" + strings.Repeat("b", 32)
+	if len(exact) != 64 {
+		t.Fatalf("fixture len %d", len(exact))
+	}
+	if got := qualifiedToolName(strings.Repeat("b", 32), strings.Repeat("a", 30)); got != exact {
+		t.Fatalf("boundary truncated: %q", got)
+	}
+}
+
+func TestNormalizeCollision(t *testing.T) {
+	r := &ResponsesRequest{Tools: []RespTool{
+		{Type: "namespace", Name: "x", Tools: []RespTool{{Type: "function", Name: "y__z"}}},
+		{Type: "namespace", Name: "x__y", Tools: []RespTool{{Type: "function", Name: "z"}}},
+	}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr == nil ||
+		!strings.Contains(eErr.Message, "collide after namespace conversion") {
+		t.Fatalf("err = %v", eErr)
+	}
+}
+
+func TestNormalizeDuplicateIdenticalFirstWins(t *testing.T) {
+	r := &ResponsesRequest{Tools: []RespTool{
+		{Type: "namespace", Name: "ns", Tools: []RespTool{
+			{Type: "function", Name: "f", Description: "first"},
+		}},
+		{Type: "namespace", Name: "ns", Tools: []RespTool{
+			{Type: "function", Name: "f", Description: "second"},
+		}},
+	}}
+	rt := NewResponseTools()
+	if _, eErr := rt.Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(r.Tools) != 1 || r.Tools[0].Description != "first" {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+}
+
+func TestNormalizeRewritesFunctionCallHistory(t *testing.T) {
+	r := reqWithInput(t, []any{
+		map[string]any{"type": "function_call", "call_id": "c1", "name": "spawn_agent", "namespace": "subagents", "arguments": "{}"},
+		map[string]any{"type": "function_call", "call_id": "c2", "name": "plain", "arguments": "{}"},
+	}, nil, nil)
+	rt := NewResponseTools()
+	conv, eErr := rt.Normalize(r, "/v1/responses")
+	if eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if conv[0].Name != "subagents__spawn_agent" || conv[0].Namespace != "" {
+		t.Fatalf("rewritten = %+v", conv[0])
+	}
+	if conv[1].Name != "plain" {
+		t.Fatalf("plain touched = %+v", conv[1])
+	}
+	if got := rt.Identity("subagents__spawn_agent"); got != (responseToolIdentity{name: "spawn_agent", namespace: "subagents"}) {
+		t.Fatalf("registry = %+v", got)
+	}
+	// Pre-registered identity: rewrite reuses the existing entry.
+	r2 := reqWithInput(t, []any{
+		map[string]any{"type": "function_call", "call_id": "c3", "name": "spawn_agent", "namespace": "subagents", "arguments": "{}"},
+	}, []RespTool{{Type: "namespace", Name: "subagents", Tools: []RespTool{{Type: "function", Name: "spawn_agent"}}}},
+		nil)
+	rt2 := NewResponseTools()
+	if _, eErr := rt2.Normalize(r2, "/v1/responses"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+}
+
+func TestNormalizeRewritesToolChoice(t *testing.T) {
+	r := reqWithInput(t, "go", []RespTool{{
+		Type: "namespace", Name: "subagents", Tools: []RespTool{{Type: "function", Name: "spawn_agent"}},
+	}}, map[string]any{"type": "function", "name": "spawn_agent", "namespace": "subagents"})
+	rt := NewResponseTools()
+	if _, eErr := rt.Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	var tc struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(r.ToolChoice, &tc); err != nil {
+		t.Fatalf("tool_choice not JSON: %v", err)
+	}
+	if tc.Name != "subagents__spawn_agent" {
+		t.Fatalf("tool_choice = %+v", tc)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(r.ToolChoice, &raw); err != nil {
+		t.Fatalf("tool_choice raw: %v", err)
+	}
+	if _, ok := raw["namespace"]; ok {
+		t.Fatalf("namespace not stripped: %s", r.ToolChoice)
+	}
+}
+
+func TestNormalizeToolChoicePassthrough(t *testing.T) {
+	// No tool_choice.
+	r := reqWithInput(t, nil, nil, nil)
+	if _, eErr := (&ResponseTools{}).Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("nil-map init: %v", eErr)
+	}
+	// String choice, object without namespace, malformed JSON: untouched.
+	for name, tc := range map[string]string{
+		"string":    `"auto"`,
+		"no ns":     `{"type":"function","name":"f"}`,
+		"malformed": `{bad`,
+	} {
+		r := &ResponsesRequest{ToolChoice: json.RawMessage(tc)}
+		if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr != nil {
+			t.Fatalf("%s: %v", name, eErr)
+		}
+		if string(r.ToolChoice) != tc {
+			t.Fatalf("%s: rewritten to %s", name, r.ToolChoice)
+		}
+	}
+	// Structured choice without a "type" still flattens the namespaced name.
+	r = &ResponsesRequest{ToolChoice: json.RawMessage(`{"name":"f","namespace":"ns"}`)}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("typeless choice: %v", eErr)
+	}
+	var tc2 struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(r.ToolChoice, &tc2); err != nil || tc2.Name != "ns__f" {
+		t.Fatalf("typeless rewritten = %s (%v)", r.ToolChoice, err)
+	}
+	// Undeclared namespaced choice registers on the fly.
+	r2 := &ResponsesRequest{ToolChoice: json.RawMessage(`{"type":"function","name":"f","namespace":"ns"}`)}
+	rt := NewResponseTools()
+	if _, eErr := rt.Normalize(r2, "/v1/responses"); eErr != nil {
+		t.Fatalf("undeclared choice: %v", eErr)
+	}
+	if got := rt.Identity("ns__f"); got != (responseToolIdentity{name: "f", namespace: "ns"}) {
+		t.Fatalf("registry = %+v", got)
+	}
+}

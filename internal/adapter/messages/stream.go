@@ -35,6 +35,7 @@ type StreamConverter struct {
 	outCount         int  // responses: next compacted output position; thinking blocks consume none (FR-005 omission)
 	emitted          bool // any client event emitted (Flush eligibility)
 	flushed          bool // one-shot guard for Flush
+	respTools        *shared.ResponseTools
 }
 
 // blockState tracks one open upstream content block by index.
@@ -52,14 +53,18 @@ type blockState struct {
 // NewStreamConverter prepares stream conversion for sourceFormat
 // ("openai" Chat Completions chunks, "openai-response" Responses events,
 // "claude" verbatim passthrough).
-func NewStreamConverter(sourceFormat string) *StreamConverter {
-	return &StreamConverter{
+func NewStreamConverter(sourceFormat string, tools ...*shared.ResponseTools) *StreamConverter {
+	sc := &StreamConverter{
 		framer:       shared.NewSSEFramer(sourceFormat == "claude"),
 		sourceFormat: sourceFormat,
 		created:      time.Now().Unix(),
 		blocks:       map[int]*blockState{},
 		msgIdx:       -1,
 	}
+	if len(tools) > 0 && tools[0] != nil {
+		sc.respTools = tools[0]
+	}
+	return sc
 }
 
 // Feed consumes one network chunk and returns fully framed client events,
@@ -375,7 +380,7 @@ func responsesMessageText(content []byte) string {
 // upstream message identity so this route's frames cannot diverge from the
 // sibling Chat-Completions-route synthesizer (FR-006).
 func (sc *StreamConverter) responsesEm() shared.ResponsesEventEmitter {
-	return shared.ResponsesEventEmitter{ID: sc.msgID, Model: sc.model}
+	return shared.ResponsesEventEmitter{ID: sc.msgID, Model: sc.model, Tools: sc.respTools}
 }
 
 // Flush terminates a stream whose upstream closed before message_stop:
@@ -415,7 +420,7 @@ func (sc *StreamConverter) outputItems() []any {
 		indexes = append(indexes, i)
 	}
 	sort.Ints(indexes)
-	oa := shared.NewOutputAssembler(sc.msgID)
+	oa := shared.NewOutputAssembler(sc.msgID, sc.respTools)
 	for _, i := range indexes {
 		bs := sc.blocks[i]
 		switch bs.kind {

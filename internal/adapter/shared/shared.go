@@ -660,6 +660,7 @@ func (e ClaudeEventEmitter) MessageStop() []byte {
 type ResponsesEventEmitter struct {
 	ID    string // response identity carried by every event
 	Model string // model rendered on the terminal completed payload
+	Tools *ResponseTools
 }
 
 // Created renders the leading response.created announcement.
@@ -676,6 +677,15 @@ func (e ResponsesEventEmitter) Created() []byte {
 // the block-type-specific fields (message id/role/content, or function_call
 // call_id/name/arguments per the canonical call_id-only shape).
 func (e ResponsesEventEmitter) ItemAdded(outputIndex int, item map[string]any) []byte {
+	if item["type"] == "function_call" {
+		if name, ok := item["name"].(string); ok {
+			id := e.Tools.Identity(name)
+			item["name"] = id.name
+			if id.namespace != "" {
+				item["namespace"] = id.namespace
+			}
+		}
+	}
 	return SSEEvent("response.output_item.added", map[string]any{
 		"type": "response.output_item.added", "output_index": outputIndex, "item": item,
 	})
@@ -718,6 +728,9 @@ func (e ResponsesEventEmitter) ContentPartDone(itemID string, outputIndex int, t
 // announced function_call item, emitted before response.completed; name
 // is included only when non-empty.
 func (e ResponsesEventEmitter) ArgsDone(itemID string, outputIndex int, name, args string) []byte {
+	if name != "" {
+		name = e.Tools.Identity(name).name
+	}
 	payload := map[string]any{
 		"type": "response.function_call_arguments.done", "item_id": itemID, "output_index": outputIndex, "arguments": args,
 	}
@@ -977,10 +990,11 @@ type ResponsesResult struct {
 
 // RespTool is one Responses function tool.
 type RespTool struct {
-	Type        string          `json:"type"` // always "function"
+	Type        string          `json:"type"` // "function" or "namespace"
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Tools       []RespTool      `json:"tools,omitempty"`
 }
 
 // ResponsesRequest decodes an inbound OpenAI Responses request body
@@ -1057,11 +1071,13 @@ type RespItem struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 	CallID    string          `json:"call_id,omitempty"`
 	Name      string          `json:"name,omitempty"`
+	Namespace string          `json:"namespace,omitempty"`
 	Arguments string          `json:"arguments,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
 	Summary   []struct {
 		Text string `json:"text"`
 	} `json:"summary,omitempty"`
+	Tools     []RespTool      `json:"tools,omitempty"`
 }
 
 // CCFunction is one Chat Completions tool function definition (decode and
@@ -1518,12 +1534,17 @@ type OutputAssembler struct {
 	items     []any           // rendered items in insertion order
 	textSlot  int             // reserved message position, -1 until reserved
 	text      strings.Builder // aggregated message text
+	tools     *ResponseTools  // wire-to-original tool identities for restoration
 }
 
 // NewOutputAssembler binds an assembler to the response identity the
 // synthesized message item carries.
-func NewOutputAssembler(messageID string) *OutputAssembler {
-	return &OutputAssembler{messageID: messageID, textSlot: -1, items: make([]any, 0)}
+func NewOutputAssembler(messageID string, tools ...*ResponseTools) *OutputAssembler {
+	a := &OutputAssembler{messageID: messageID, textSlot: -1, items: make([]any, 0)}
+	if len(tools) > 0 && tools[0] != nil {
+		a.tools = tools[0]
+	}
+	return a
 }
 
 // ReserveTextSlot pins the message item's position at the current end of
@@ -1546,8 +1567,9 @@ func (a *OutputAssembler) AddText(fragment string) {
 // arguments pass through verbatim — callers apply the absent-arguments
 // policy themselves.
 func (a *OutputAssembler) AppendFunctionCall(callID, name, args string) {
+	id := a.tools.Identity(name)
 	a.items = append(a.items, RespItem{
-		Type: "function_call", CallID: callID, Name: name, Arguments: args,
+		Type: "function_call", CallID: callID, Name: id.name, Namespace: id.namespace, Arguments: args,
 	})
 }
 
