@@ -567,6 +567,26 @@ func TestBuildRequestResponses(t *testing.T) {
 	}
 }
 
+func TestFromResponsesRequest_FunctionCallOutputArray(t *testing.T) {
+	body := `{
+		"model":"opencode-go/glm-5.2",
+		"input":[
+			{"type":"function_call","call_id":"c1","name":"read","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":[{"type":"input_text","text":"file contents"}]}
+		]
+	}`
+	m := mustBuild(t, "openai-response", body, nil)
+	msgs := m["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("want 2 messages, got %d: %v", len(msgs), msgs)
+	}
+	outMsg := msgs[1].(map[string]any)
+	if outMsg["role"] != "tool" || outMsg["tool_call_id"] != "c1" || outMsg["content"] != "file contents" {
+		t.Fatalf("function_call_output wrong: %v", outMsg)
+	}
+}
+
+
 func TestBuildRequestResponsesVariants(t *testing.T) {
 	t.Run("empty string input yields no messages", func(t *testing.T) {
 		m := mustBuild(t, "openai-response", `{"input":""}`, nil)

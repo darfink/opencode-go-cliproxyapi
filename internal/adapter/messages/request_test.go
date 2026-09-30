@@ -471,6 +471,29 @@ func TestResponsesItems(t *testing.T) {
 	}
 }
 
+func TestFromResponsesRequest_FunctionCallOutputArray(t *testing.T) {
+	body := `{
+		"model":"opencode-go/glm-5.2",
+		"input":[
+			{"type":"function_call","call_id":"c1","name":"read","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":[{"type":"input_text","text":"file contents"}]}
+		]
+	}`
+	m, eErr := respReq(t, body)
+	if eErr != nil {
+		t.Fatalf("unexpected error: %v", eErr)
+	}
+	msgs := m["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %d: %v", len(msgs), msgs)
+	}
+	out := msgs[1].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if out["type"] != "tool_result" || out["tool_use_id"] != "c1" || out["content"] != "file contents" {
+		t.Errorf("function_call_output block = %v", out)
+	}
+}
+
+
 func TestResponsesReasoningOmittedWhenEmptySummary(t *testing.T) {
 	m, eErr := respReq(t, `{"input":[{"type":"reasoning","summary":[]}]}`)
 	if eErr != nil {

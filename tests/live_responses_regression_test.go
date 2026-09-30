@@ -221,3 +221,51 @@ func TestLiveInHistorySystemRoleInMessages(t *testing.T) {
 		t.Fatalf("expected HTTP 200, got %d: %s", resp.StatusCode, string(body))
 	}
 }
+
+// TestLiveResponsesMultipartToolOutput verifies that a Responses request with
+// an array tool output (function_call_output.output containing content parts)
+// decodes successfully without failing unmarshaling (Issue BUG-03).
+func TestLiveResponsesMultipartToolOutput(t *testing.T) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	payload := map[string]any{
+		"model":             modelID("glm-5.2"),
+		"max_output_tokens": 16,
+		"input": []map[string]any{
+			{
+				"type":      "function_call",
+				"call_id":   "c1",
+				"name":      "read",
+				"arguments": "{}",
+			},
+			{
+				"type":    "function_call_output",
+				"call_id": "c1",
+				"output": []map[string]string{
+					{"type": "input_text", "text": "file contents"},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, cpaHost+"/v1/responses", bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+cpaKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected HTTP 200, got %d: %s", resp.StatusCode, string(body))
+	}
+}
+

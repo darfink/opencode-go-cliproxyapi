@@ -533,8 +533,12 @@ func fromResponses(upstreamModel string, body []byte, ts *pluginapi.ThinkingSupp
 				"type": "tool_use", "id": item.CallID, "name": item.Name, "input": input,
 			})
 		case "function_call_output":
+			text, eErr := shared.RespOutputText(item.Output, "tool messages carry text only")
+			if eErr != nil {
+				return nil, eErr
+			}
 			b.add("user:tool", "user", anthropicBlock{
-				"type": "tool_result", "tool_use_id": item.CallID, "content": item.Output,
+				"type": "tool_result", "tool_use_id": item.CallID, "content": text,
 			})
 		case "reasoning":
 			// Best-effort: keep summary text as a thinking block;

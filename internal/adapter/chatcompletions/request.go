@@ -433,8 +433,12 @@ func responsesToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSu
 				Role: "assistant", ToolCalls: []shared.CCToolCall{tc},
 			})
 		case "function_call_output":
+			text, eErr := shared.RespOutputText(item.Output, "tool messages carry text only")
+			if eErr != nil {
+				return nil, eErr
+			}
 			out.Messages = append(out.Messages, ccMessage{
-				Role: "tool", Content: item.Output, ToolCallID: item.CallID,
+				Role: "tool", Content: text, ToolCallID: item.CallID,
 			})
 		case "reasoning":
 			// omitted: no Chat Completions equivalent (FR-005 policy)

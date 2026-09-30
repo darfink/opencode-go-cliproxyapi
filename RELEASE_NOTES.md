@@ -4,6 +4,7 @@
 
 - Fix missing Responses stream item lifecycle completion events (output_text.done, content_part.done, function_call_arguments.done, output_item.done) prior to response.completed, resolving dropped assistant output and tool calls in OpenAI Codex CLI and strict Responses clients.
 - Fix handling of in-history messages with role: "system" across protocol adapters without rejecting them as unsupported roles or forwarding invalid turn roles to upstream providers that require alternating user/assistant turns.
+- Fix handling of multi-part content arrays in function_call_output.output under /v1/responses decoding.
 
 
 ## Upgrade Notes
