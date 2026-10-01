@@ -201,6 +201,48 @@ func TestBuildRequest_ResponsesToResponses_PreservesRawInputFields(t *testing.T)
 	}
 }
 
+func TestBuildRequest_ResponsesToResponses_FunctionCallEmptyArgs(t *testing.T) {
+	body := []byte(`{"input":[
+		{"type":"function_call","call_id":"c1","name":"lookup","arguments":""},
+		{"type":"function_call","call_id":"c2","name":"lookup"}
+	]}`)
+	out, eErr := BuildRequest("muse-spark-1.3-contributor", "openai-response", body, nil)
+	if eErr != nil {
+		t.Fatalf("BuildRequest err = %+v, want nil", eErr)
+	}
+	items := inputItems(t, decodeReq(t, out))
+	if len(items) != 2 {
+		t.Fatalf("items = %d: %v", len(items), items)
+	}
+	for i, want := range []string{"c1", "c2"} {
+		fc := itemMap(t, items, i)
+		if fc["type"] != "function_call" || fc["call_id"] != want || fc["arguments"] != "{}" {
+			t.Errorf("function_call %d = %v, want arguments {}", i, fc)
+		}
+	}
+}
+
+func TestBuildRequest_ResponsesToResponses_CompactionDropped(t *testing.T) {
+	body := []byte(`{"input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+		{"type":"compaction","encrypted_content":"blob"},
+		{"type":"reasoning","id":"rs_1","summary":[]}
+	]}`)
+	out, eErr := BuildRequest("grok-4-6", "openai-response", body, nil)
+	if eErr != nil {
+		t.Fatalf("BuildRequest err = %+v, want nil", eErr)
+	}
+	items := inputItems(t, decodeReq(t, out))
+	if len(items) != 2 {
+		t.Fatalf("items = %d: %v", len(items), items)
+	}
+	for _, item := range items {
+		if im, ok := item.(map[string]any); ok && im["type"] == "compaction" {
+			t.Fatalf("compaction not dropped: %v", items)
+		}
+	}
+}
+
 func mustBuild(t *testing.T, model, format string, body []byte, ts *pluginapi.ThinkingSupport) []byte {
 	t.Helper()
 	out, eErr := BuildRequest(model, format, body, ts)

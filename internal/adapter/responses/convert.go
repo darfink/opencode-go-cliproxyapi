@@ -55,7 +55,7 @@ type respResultIn struct {
 // passes through; "openai" and "claude" are converted, preserving text,
 // function calls, terminal status, and usage. Unknown formats are
 // ClassUnsupported; malformed upstream bodies are ClassTranslation.
-func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []byte, _ ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
 	if status >= 400 {
 		return nil, shared.UpstreamStatusError(status, upstreamBody)
 	}
@@ -64,7 +64,7 @@ func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []by
 		if !json.Valid(upstreamBody) {
 			return nil, errclass.Translation("malformed Responses response JSON")
 		}
-		return upstreamBody, nil
+		return restoreCustomPassthrough(upstreamBody, shared.ResponseToolContext(tools)), nil
 	case "openai":
 		return responsesToChat(upstreamBody)
 	case "claude":
@@ -72,6 +72,44 @@ func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []by
 	default:
 		return nil, shared.UnsupportedFormat(sourceFormat, EndpointPath)
 	}
+}
+
+// restoreCustomPassthrough rewrites function_call output items for custom
+// tools into their custom_tool_call shape on the native passthrough path;
+// bodies without output arrays or custom tools pass through untouched.
+func restoreCustomPassthrough(body []byte, rt *shared.ResponseTools) []byte {
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body
+	}
+	raw, ok := doc["output"].([]any)
+	if !ok {
+		return body
+	}
+	changed := false
+	for _, entry := range raw {
+		item, ok := entry.(map[string]any)
+		if !ok || item["type"] != "function_call" {
+			continue
+		}
+		name, _ := item["name"].(string)
+		if !rt.IsCustom(name) {
+			continue
+		}
+		args, _ := item["arguments"].(string)
+		item["type"] = "custom_tool_call"
+		item["input"] = shared.UnwrapCustomToolInput(args)
+		delete(item, "arguments")
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // decodeResp validates and decodes an upstream non-stream Responses body;

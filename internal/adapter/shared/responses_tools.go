@@ -66,17 +66,27 @@ func (t *ResponseTools) IsCustom(name string) bool {
 }
 
 // UnwrapCustomToolInput extracts the input string from custom tool call
-// arguments: a JSON object with an "input" property unwraps to that raw
-// string value, otherwise the arguments pass through verbatim.
+// arguments: a JSON object with properties like "input", "code", or "arguments"
+// unwraps to that raw string value, otherwise the arguments pass through verbatim.
 func UnwrapCustomToolInput(args string) string {
 	var m map[string]json.RawMessage
 	if json.Unmarshal([]byte(args), &m) == nil {
-		if raw, ok := m["input"]; ok {
-			var s string
-			if json.Unmarshal(raw, &s) == nil {
-				return s
+		for _, key := range []string{"input", "code", "arguments", "cmd", "command"} {
+			if raw, ok := m[key]; ok {
+				var s string
+				if json.Unmarshal(raw, &s) == nil {
+					return s
+				}
+				return string(raw)
 			}
-			return string(raw)
+		}
+		if len(m) == 1 {
+			for _, raw := range m {
+				var s string
+				if json.Unmarshal(raw, &s) == nil {
+					return s
+				}
+			}
 		}
 	}
 	return args
@@ -113,7 +123,7 @@ func normalizeCustomTool(tool *RespTool, target string) bool {
 	if tool.Type == "custom" {
 		tool.Type = "function"
 		if len(tool.Parameters) == 0 {
-			tool.Parameters = json.RawMessage(`{"type":"object","properties":{}}`)
+			tool.Parameters = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":true}`)
 		}
 	}
 	return true

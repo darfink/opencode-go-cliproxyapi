@@ -135,6 +135,24 @@ func fromResponsesNormalized(upstreamModel string, sourceBody []byte, tools ...*
 						return nil, errclass.Translation("failed to encode normalized Responses request: " + err.Error())
 					}
 					preserved = append(preserved, b)
+				case "compaction":
+					// Dropped: non-GPT upstreams reject compaction blobs.
+				case "function_call":
+					var m map[string]json.RawMessage
+					if err := json.Unmarshal(item, &m); err != nil {
+						return nil, errclass.Translation("invalid Responses request body: malformed JSON")
+					}
+					var args string
+					if rawArgs, ok := m["arguments"]; ok {
+						_ = json.Unmarshal(rawArgs, &args)
+					}
+					ab, _ := json.Marshal(shared.DefaultArgs(args))
+					m["arguments"] = ab
+					b, err := json.Marshal(m)
+					if err != nil {
+						return nil, errclass.Translation("failed to encode normalized Responses request: " + err.Error())
+					}
+					preserved = append(preserved, b)
 				default:
 					preserved = append(preserved, item)
 				}
