@@ -393,6 +393,77 @@ func TestNormalizeApplyPatchDropped(t *testing.T) {
 	}
 }
 
+func TestOutputAssemblerCustomToolCallEmission(t *testing.T) {
+	rt := NewResponseTools()
+	r := &ResponsesRequest{Tools: []RespTool{{Type: "custom", Name: "exec"}}}
+	if _, eErr := rt.Normalize(r, "/v1/chat/completions"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	oa := NewOutputAssembler("msg_1", rt)
+	oa.AppendFunctionCall("call_1", "exec", "{\"input\":\"console.log('hi')\"}")
+	res := oa.Render()
+	if len(res) != 1 {
+		t.Fatalf("output len = %d want 1 (%v)", len(res), res)
+	}
+	item, ok := res[0].(RespItem)
+	if !ok {
+		t.Fatalf("output[0] type = %T want RespItem", res[0])
+	}
+	if item.Type != "custom_tool_call" {
+		t.Fatalf("type = %q want %q (full: %+v)", item.Type, "custom_tool_call", item)
+	}
+	if item.CallID != "call_1" {
+		t.Fatalf("call_id = %q want %q", item.CallID, "call_1")
+	}
+	if item.Name != "exec" {
+		t.Fatalf("name = %q want %q", item.Name, "exec")
+	}
+	if item.Input != "console.log('hi')" {
+		t.Fatalf("input = %q want %q (full: %+v)", item.Input, "console.log('hi')", item)
+	}
+	if item.Arguments != "" {
+		t.Fatalf("arguments must be empty for custom_tool_call, got %q", item.Arguments)
+	}
+}
+
+func TestNamespacedCustomToolCompletionEmitsInputDone(t *testing.T) {
+	rt := NewResponseTools()
+	r := &ResponsesRequest{Tools: []RespTool{{
+		Type: "namespace", Name: "subagents",
+		Tools: []RespTool{{Type: "custom", Name: "custom_sub"}},
+	}}}
+	if _, eErr := rt.Normalize(r, "/v1/chat/completions"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	qualified := r.Tools[0].Name
+	if !rt.IsCustom(qualified) {
+		t.Fatalf("qualified %q must be custom", qualified)
+	}
+	em := ResponsesEventEmitter{ID: "resp_1", Model: "m", Tools: rt}
+	raw := em.InputDone("call_1", 0, "hello")
+	s := string(raw)
+	if !strings.HasPrefix(s, "event: response.custom_tool_call_input.done\n") {
+		t.Fatalf("event name wrong: %q", s)
+	}
+	_, data, ok := strings.Cut(s, "\ndata: ")
+	if !ok {
+		t.Fatalf("missing data line: %q", s)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSuffix(data, "\n\n")), &payload); err != nil {
+		t.Fatalf("payload not JSON: %v (%q)", err, data)
+	}
+	if payload["type"] != "response.custom_tool_call_input.done" {
+		t.Fatalf("type = %v want response.custom_tool_call_input.done (full: %v)", payload["type"], payload)
+	}
+	if payload["type"] == "response.function_call_arguments.done" {
+		t.Fatalf("must not emit function_call_arguments.done for custom tool: %v", payload)
+	}
+	if payload["item_id"] != "call_1" || payload["output_index"] != float64(0) || payload["input"] != "hello" {
+		t.Fatalf("payload wrong: %v", payload)
+	}
+}
+
 func TestNormalizeNamespaceCustomChildUnrolled(t *testing.T) {
 	r := &ResponsesRequest{Tools: []RespTool{{
 		Type: "namespace", Name: "subagents",

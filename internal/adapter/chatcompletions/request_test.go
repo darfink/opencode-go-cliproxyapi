@@ -962,3 +962,42 @@ func TestInHistorySystemRoleInMessages(t *testing.T) {
 	}
 }
 
+func TestFromResponses_CustomToolCallAndOutput(t *testing.T) {
+	body := `{
+		"input": [
+			{"type": "message", "role": "user", "content": "run script"},
+			{"type": "custom_tool_call", "call_id": "call_c1", "name": "exec", "input": "text('ok');"},
+			{"type": "custom_tool_call_output", "call_id": "call_c1", "output": [{"type": "input_text", "text": "ok"}]}
+		]
+	}`
+	out, eErr := BuildRequest("gpt-4o", "openai-response", []byte(body), nil)
+	if eErr != nil {
+		t.Fatalf("unexpected error: %v", eErr)
+	}
+	m := decodeOut(t, out, eErr)
+	msgs := m["messages"].([]any)
+	if len(msgs) != 3 {
+		t.Fatalf("want 3 messages, got %d: %v", len(msgs), msgs)
+	}
+	if msgs[0].(map[string]any)["role"] != "user" || msgs[0].(map[string]any)["content"] != "run script" {
+		t.Fatalf("message 0 wrong: %v", msgs[0])
+	}
+	asst := msgs[1].(map[string]any)
+	if asst["role"] != "assistant" {
+		t.Fatalf("message 1 role = %v, want assistant", asst["role"])
+	}
+	calls := asst["tool_calls"].([]any)
+	c0 := calls[0].(map[string]any)
+	if c0["id"] != "call_c1" {
+		t.Fatalf("tool call id = %v, want call_c1", c0["id"])
+	}
+	fn := c0["function"].(map[string]any)
+	if fn["name"] != "exec" || fn["arguments"] != "text('ok');" {
+		t.Fatalf("tool call function wrong: %v", fn)
+	}
+	tool := msgs[2].(map[string]any)
+	if tool["role"] != "tool" || tool["tool_call_id"] != "call_c1" || tool["content"] != "ok" {
+		t.Fatalf("tool message wrong: %v", tool)
+	}
+}
+

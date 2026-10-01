@@ -680,6 +680,11 @@ func (e ResponsesEventEmitter) ItemAdded(outputIndex int, item map[string]any) [
 	if item["type"] == "function_call" {
 		if name, ok := item["name"].(string); ok {
 			id := e.Tools.Identity(name)
+			if id.isCustom {
+				item["type"] = "custom_tool_call"
+				item["input"] = ""
+				delete(item, "arguments")
+			}
 			item["name"] = id.name
 			if id.namespace != "" {
 				item["namespace"] = id.namespace
@@ -705,6 +710,41 @@ func (e ResponsesEventEmitter) ArgsDelta(itemID string, outputIndex int, delta s
 	return SSEEvent("response.function_call_arguments.delta", map[string]any{
 		"type": "response.function_call_arguments.delta", "item_id": itemID, "output_index": outputIndex, "delta": delta,
 	})
+}
+
+// InputDelta streams one partial custom_tool_call_input delta referencing
+// the announced custom_tool_call item by item_id and output_index.
+func (e ResponsesEventEmitter) InputDelta(itemID string, outputIndex int, delta string) []byte {
+	return SSEEvent("response.custom_tool_call_input.delta", map[string]any{
+		"type": "response.custom_tool_call_input.delta", "item_id": itemID, "output_index": outputIndex, "delta": delta,
+	})
+}
+
+// InputDone renders the custom_tool_call_input completion for the
+// announced custom_tool_call item, emitted before response.completed.
+func (e ResponsesEventEmitter) InputDone(itemID string, outputIndex int, input string) []byte {
+	return SSEEvent("response.custom_tool_call_input.done", map[string]any{
+		"type": "response.custom_tool_call_input.done", "item_id": itemID, "output_index": outputIndex, "input": input,
+	})
+}
+
+// CustomInputTail derives the newly-available custom tool input from the
+// accumulated wrapped arguments: nothing is reportable until the
+// accumulation unwraps past its JSON envelope, at which point only the
+// tail beyond already-reported bytes returns. Callers advance *emitted
+// past the returned tail, so raw {"input":" wrapper tokens never reach
+// client input deltas while complete inputs still stream incrementally.
+func CustomInputTail(accumulated string, emitted *int) string {
+	unwrapped := UnwrapCustomToolInput(accumulated)
+	if unwrapped == accumulated {
+		return ""
+	}
+	if *emitted >= len(unwrapped) {
+		return ""
+	}
+	tail := unwrapped[*emitted:]
+	*emitted = len(unwrapped)
+	return tail
 }
 
 // TextDone renders the output_text completion for the announced message
@@ -1073,6 +1113,7 @@ type RespItem struct {
 	Name      string          `json:"name,omitempty"`
 	Namespace string          `json:"namespace,omitempty"`
 	Arguments string          `json:"arguments,omitempty"`
+	Input     string          `json:"input,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
 	Summary   []struct {
 		Text string `json:"text"`
@@ -1565,9 +1606,16 @@ func (a *OutputAssembler) AddText(fragment string) {
 
 // AppendFunctionCall adds one function_call item in arrival order;
 // arguments pass through verbatim — callers apply the absent-arguments
-// policy themselves.
+// policy themselves. Tools originally declared as type "custom" restore
+// as custom_tool_call items with unwrapped input.
 func (a *OutputAssembler) AppendFunctionCall(callID, name, args string) {
 	id := a.tools.Identity(name)
+	if id.isCustom {
+		a.items = append(a.items, RespItem{
+			Type: "custom_tool_call", CallID: callID, Name: id.name, Namespace: id.namespace, Input: UnwrapCustomToolInput(args),
+		})
+		return
+	}
 	a.items = append(a.items, RespItem{
 		Type: "function_call", CallID: callID, Name: id.name, Namespace: id.namespace, Arguments: args,
 	})

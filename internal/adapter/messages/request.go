@@ -535,7 +535,20 @@ func fromResponses(upstreamModel string, body []byte, ts *pluginapi.ThinkingSupp
 			b.add("assistant", "assistant", anthropicBlock{
 				"type": "tool_use", "id": item.CallID, "name": item.Name, "input": input,
 			})
-		case "function_call_output":
+		case "custom_tool_call":
+			args := item.Arguments
+			if args == "" && item.Input != "" {
+				args = item.Input
+			}
+			input, eErr := shared.DecodeArgs(args)
+			if eErr != nil {
+				// Freeform custom tool input is not JSON: wrap verbatim.
+				input = map[string]any{"input": args}
+			}
+			b.add("assistant", "assistant", anthropicBlock{
+				"type": "tool_use", "id": item.CallID, "name": item.Name, "input": input,
+			})
+		case "function_call_output", "custom_tool_call_output":
 			text, eErr := shared.RespOutputText(item.Output, "tool messages carry text only")
 			if eErr != nil {
 				return nil, eErr

@@ -415,10 +415,14 @@ func responsesToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSu
 			default:
 				return nil, shared.ValidateRole(item.Role, EndpointPath)
 			}
-		case "function_call":
+		case "function_call", "custom_tool_call":
+			args := item.Arguments
+			if args == "" && item.Input != "" {
+				args = item.Input
+			}
 			tc := shared.CCToolCall{ID: item.CallID, Type: "function"}
 			tc.Function.Name = item.Name
-			tc.Function.Arguments = shared.DefaultArgs(item.Arguments)
+			tc.Function.Arguments = shared.DefaultArgs(args)
 			// Merge consecutive function_call items into one
 			// assistant message so multi-call turns round-trip.
 			if n := len(out.Messages); n > 0 {
@@ -431,7 +435,7 @@ func responsesToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSu
 			out.Messages = append(out.Messages, ccMessage{
 				Role: "assistant", ToolCalls: []shared.CCToolCall{tc},
 			})
-		case "function_call_output":
+		case "function_call_output", "custom_tool_call_output":
 			text, eErr := shared.RespOutputText(item.Output, "tool messages carry text only")
 			if eErr != nil {
 				return nil, eErr

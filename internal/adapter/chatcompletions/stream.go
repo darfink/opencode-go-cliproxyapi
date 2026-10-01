@@ -54,6 +54,7 @@ type streamTool struct {
 	name       string
 	args       strings.Builder
 	stopped    bool // content_block_stop emitted
+	customEmitted int // custom_tool_call_input bytes already emitted as deltas
 }
 
 // NewStreamConverter returns a converter translating Chat Completions
@@ -478,7 +479,17 @@ func (sc *StreamConverter) responsesLine(line string) ([][]byte, *errclass.Error
 		}
 		if tc.Function.Arguments != "" {
 			t.args.WriteString(tc.Function.Arguments)
-			events = append(events, sc.responsesEm().ArgsDelta(t.id, t.blockIndex, tc.Function.Arguments))
+			if sc.respTools.IsCustom(t.name) {
+				// Custom tool arguments stream as wrapped JSON
+				// ({"input":"..."}) that only unwraps once complete:
+				// only the newly-unwrapped input tail is emitted, so
+				// raw wrapper tokens never leak into client deltas.
+				if tail := shared.CustomInputTail(t.args.String(), &t.customEmitted); tail != "" {
+					events = append(events, sc.responsesEm().InputDelta(t.id, t.blockIndex, tail))
+				}
+			} else {
+				events = append(events, sc.responsesEm().ArgsDelta(t.id, t.blockIndex, tc.Function.Arguments))
+			}
 		}
 	}
 	if choice.FinishReason != "" && !sc.finished {
@@ -560,6 +571,9 @@ func (sc *StreamConverter) responsesTerminal() [][]byte {
 			events = append(events, em.ItemDone(idx, v))
 		case "function_call":
 			events = append(events, em.ArgsDone(v.CallID, idx, v.Name, v.Arguments))
+			events = append(events, em.ItemDone(idx, v))
+		case "custom_tool_call":
+			events = append(events, em.InputDone(v.CallID, idx, v.Input))
 			events = append(events, em.ItemDone(idx, v))
 		}
 	}

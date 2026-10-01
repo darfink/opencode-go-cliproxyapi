@@ -48,6 +48,7 @@ type blockState struct {
 	emitted bool            // openai: id/name attached to the first arguments fragment
 	text    strings.Builder // accumulated text_delta content (responses target)
 	args    strings.Builder // accumulated input_json_delta content (responses target)
+	customEmitted int // custom_tool_call_input bytes already emitted as deltas
 }
 
 // NewStreamConverter prepares stream conversion for sourceFormat
@@ -306,7 +307,16 @@ func (sc *StreamConverter) dispatchResponses(etype string, ev *sseEvent, events 
 				return false, errclass.Translation("tool arguments fragment without a tool_use block start")
 			}
 			bs.args.WriteString(ev.Delta.PartialJSON)
-			*events = append(*events, sc.responsesEm().ArgsDelta(bs.id, bs.outIdx, ev.Delta.PartialJSON))
+			if sc.respTools.IsCustom(bs.name) {
+				// Same wrapped-JSON accumulation as the Chat
+				// Completions route: raw fragments never reach the
+				// client, only newly-unwrapped input tails.
+				if tail := shared.CustomInputTail(bs.args.String(), &bs.customEmitted); tail != "" {
+					*events = append(*events, sc.responsesEm().InputDelta(bs.id, bs.outIdx, tail))
+				}
+			} else {
+				*events = append(*events, sc.responsesEm().ArgsDelta(bs.id, bs.outIdx, ev.Delta.PartialJSON))
+			}
 		case "thinking_delta":
 			// FR-005 explicit omission policy: no standard Responses
 			// reasoning-delta event; dropped.
@@ -355,6 +365,8 @@ func (sc *StreamConverter) responsesCompleted() [][]byte {
 			out = append(out, em.TextDone(v.ID, idx, text), em.ContentPartDone(v.ID, idx, text), em.ItemDone(idx, v))
 		case "function_call":
 			out = append(out, em.ArgsDone(v.CallID, idx, v.Name, v.Arguments), em.ItemDone(idx, v))
+		case "custom_tool_call":
+			out = append(out, em.InputDone(v.CallID, idx, v.Input), em.ItemDone(idx, v))
 		}
 	}
 	return append(out, em.Completed(status, usage, items))

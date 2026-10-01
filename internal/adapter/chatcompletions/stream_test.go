@@ -1145,6 +1145,90 @@ func TestStreamResponses_ItemDoneEvents(t *testing.T) {
 	}
 }
 
+func TestStreamResponsesCustomToolCallRestored(t *testing.T) {
+	rt := shared.NewResponseTools()
+	reqBody := `{"input":"hi","tools":[{"type":"custom","name":"exec"}]}`
+	if _, eErr := BuildRequest("m", "openai-response", []byte(reqBody), nil, rt); eErr != nil {
+		t.Fatalf("BuildRequest: %v", eErr)
+	}
+	sc := NewStreamConverter("openai-response", rt)
+	evs := feedAll(t, sc,
+		`data: {"id":"r1","model":"m","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"exec","arguments":""}}]}}]}`)
+	var added map[string]any
+	for _, e := range evs {
+		if e.Name == "response.output_item.added" {
+			added = e.Data
+		}
+	}
+	if added == nil {
+		t.Fatalf("missing response.output_item.added: %v", evs)
+	}
+	item, ok := added["item"].(map[string]any)
+	if !ok {
+		t.Fatalf("added item not an object: %v", added)
+	}
+	if item["type"] != "custom_tool_call" {
+		t.Fatalf("added item.type = %v want custom_tool_call (full: %v)", item["type"], item)
+	}
+	if item["call_id"] != "c1" {
+		t.Fatalf("added item.call_id = %v want c1", item["call_id"])
+	}
+	if item["name"] != "exec" {
+		t.Fatalf("added item.name = %v want exec", item["name"])
+	}
+	if item["input"] != "" {
+		t.Fatalf("added item.input = %v want empty string", item["input"])
+	}
+
+	evs = feedAll(t, sc,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"input\":\"ls -la\"}"}}]}}]}`)
+	if len(evs) != 1 {
+		t.Fatalf("want one argument delta, got %v", evs)
+	}
+	if evs[0].Name != "response.custom_tool_call_input.delta" {
+		t.Fatalf("delta event = %q want response.custom_tool_call_input.delta (full: %v)", evs[0].Name, evs[0])
+	}
+	if evs[0].Data["delta"] != "ls -la" {
+		t.Fatalf("delta = %v want ls -la", evs[0].Data["delta"])
+	}
+}
+
+// Fragmented custom-tool arguments must not leak raw {"input":" wrapper
+// tokens into client custom tool input deltas: the three upstream JSON
+// fragments below concatenate to {"input":"hello"}, so the client must
+// see only "hello" across its input deltas.
+func TestStreamResponsesCustomToolFragmentedDeltasDoNotLeakWrapper(t *testing.T) {
+	rt := shared.NewResponseTools()
+	reqBody := `{"input":"hi","tools":[{"type":"custom","name":"exec"}]}`
+	if _, eErr := BuildRequest("m", "openai-response", []byte(reqBody), nil, rt); eErr != nil {
+		t.Fatalf("BuildRequest: %v", eErr)
+	}
+	sc := NewStreamConverter("openai-response", rt)
+	evs := feedAll(t, sc,
+		`data: {"id":"r1","model":"m","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"exec","arguments":""}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"input\":\""}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"hello"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]}}]}`)
+	var got []string
+	for _, e := range evs {
+		switch e.Name {
+		case "response.function_call_arguments.delta":
+			t.Fatalf("custom tool must not emit function args deltas: %v", e)
+		case "response.custom_tool_call_input.delta":
+			delta, _ := e.Data["delta"].(string)
+			if strings.Contains(delta, `{"input":"`) {
+				t.Fatalf("raw wrapper leaked into input delta: %q (full: %v)", delta, evs)
+			}
+			got = append(got, delta)
+		}
+	}
+	if strings.Join(got, "") != "hello" {
+		t.Fatalf("joined input deltas = %q want %q (full: %v)", strings.Join(got, ""), "hello", evs)
+	}
+}
+
 func TestStreamResponsesNamespaceRestored(t *testing.T) {
 	rt := shared.NewResponseTools()
 	reqBody := `{"input":"hi","tools":[{"type":"namespace","name":"subagents","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}]}`

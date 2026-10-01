@@ -11,7 +11,13 @@ import (
 
 // responseToolIdentity is the original (name, namespace) pair behind one
 // flattened wire name. A plain function tool carries an empty namespace.
-type responseToolIdentity struct{ name, namespace string }
+// isCustom marks tools originally declared as type "custom" so the
+// outbound path restores custom_tool_call items.
+type responseToolIdentity struct {
+	name      string
+	namespace string
+	isCustom  bool
+}
 
 // ResponseTools tracks flattened namespace wire names to their original
 // identity so outbound function calls restore on the return path.
@@ -46,6 +52,34 @@ func (t *ResponseTools) Identity(name string) responseToolIdentity {
 		return id
 	}
 	return responseToolIdentity{name: name}
+}
+
+// IsCustom reports whether a wire tool name was originally declared as
+// type "custom". Unknown names (and a nil registry) report false.
+func (t *ResponseTools) IsCustom(name string) bool {
+	if t != nil && t.names != nil {
+		if id, ok := t.names[name]; ok {
+			return id.isCustom
+		}
+	}
+	return false
+}
+
+// UnwrapCustomToolInput extracts the input string from custom tool call
+// arguments: a JSON object with an "input" property unwraps to that raw
+// string value, otherwise the arguments pass through verbatim.
+func UnwrapCustomToolInput(args string) string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(args), &m) == nil {
+		if raw, ok := m["input"]; ok {
+			var s string
+			if json.Unmarshal(raw, &s) == nil {
+				return s
+			}
+			return string(raw)
+		}
+	}
+	return args
 }
 
 // qualifiedToolName flattens one namespaced child to its wire name. Names
@@ -112,8 +146,14 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 	var flat []RespTool
 	for _, tool := range r.Tools {
 		if tool.Type != "namespace" {
+			wasCustom := tool.Type == "custom"
 			if !normalizeCustomTool(&tool, target) {
 				continue
+			}
+			if wasCustom {
+				if _, ok := t.names[tool.Name]; !ok {
+					t.names[tool.Name] = responseToolIdentity{name: tool.Name, isCustom: true}
+				}
 			}
 			flat = append(flat, tool)
 			continue
@@ -122,6 +162,7 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 			return nil, errclass.Translation("namespace tool requires a name and tools array")
 		}
 		for _, child := range tool.Tools {
+			wasCustom := child.Type == "custom"
 			if !normalizeCustomTool(&child, target) {
 				continue
 			}
@@ -129,7 +170,7 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 				return nil, eErr
 			}
 			qualified := qualifiedToolName(child.Name, tool.Name)
-			id := responseToolIdentity{name: child.Name, namespace: tool.Name}
+			id := responseToolIdentity{name: child.Name, namespace: tool.Name, isCustom: wasCustom}
 			if prev, ok := t.names[qualified]; ok {
 				if prev != id {
 					return nil, errclass.Translation("Responses tool names collide after namespace conversion")
@@ -143,7 +184,7 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 	}
 	r.Tools = flat
 	for i := range conv {
-		if conv[i].Type == "function_call" && conv[i].Namespace != "" {
+		if (conv[i].Type == "function_call" || conv[i].Type == "custom_tool_call") && conv[i].Namespace != "" {
 			id := responseToolIdentity{name: conv[i].Name, namespace: conv[i].Namespace}
 			qualified := qualifiedToolName(conv[i].Name, conv[i].Namespace)
 			if _, ok := t.names[qualified]; !ok {
