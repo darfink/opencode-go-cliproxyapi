@@ -91,6 +91,116 @@ func TestPassthroughMalformed(t *testing.T) {
 	wantErr(t, eErr, errclass.ClassTranslation)
 }
 
+func TestBuildRequest_ResponsesToResponses_NonGPTNormalized(t *testing.T) {
+	body := []byte(`{"model":"whatever","input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"say ok"}]},
+		{"type":"additional_tools","tools":[{"type":"function","name":"extra"}]}
+	],"tools":[
+		{"type":"custom","name":"exec"},
+		{"type":"web_search","search_content_types":["news"]}
+	]}`)
+
+	out, eErr := BuildRequest("muse-spark-1.3-contributor", "openai-response", body, nil)
+	if eErr != nil {
+		t.Fatalf("BuildRequest err = %+v, want nil", eErr)
+	}
+	m := decodeReq(t, out)
+	tools, ok := m["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("missing tools: %v", m)
+	}
+	byName := map[string]map[string]any{}
+	for _, tl := range tools {
+		tm, ok := tl.(map[string]any)
+		if !ok {
+			t.Fatalf("tool not an object: %v", tl)
+		}
+		if typ, _ := tm["type"].(string); typ == "web_search" {
+			byName["web_search"] = tm
+			continue
+		}
+		if name, _ := tm["name"].(string); name != "" {
+			byName[name] = tm
+		}
+	}
+	exec, ok := byName["exec"]
+	if !ok {
+		t.Fatalf("exec tool missing: %v", tools)
+	}
+	if exec["type"] != "function" {
+		t.Errorf("exec type = %v, want function", exec["type"])
+	}
+	if exec["parameters"] == nil {
+		t.Errorf("exec parameters missing: %v", exec)
+	}
+	if _, ok := byName["extra"]; !ok {
+		t.Errorf("additional_tools not merged into tools: %v", tools)
+	}
+	if ws, ok := byName["web_search"]; ok {
+		if _, has := ws["search_content_types"]; has {
+			t.Errorf("search_content_types not stripped: %v", ws)
+		}
+	} else {
+		t.Errorf("web_search tool missing: %v", tools)
+	}
+	for _, item := range inputItems(t, m) {
+		if im, ok := item.(map[string]any); ok && im["type"] == "additional_tools" {
+			t.Errorf("additional_tools not stripped from input: %v", m["input"])
+			break
+		}
+	}
+
+	out, eErr = BuildRequest("gpt-6-luna", "openai-response", body, nil)
+	if eErr != nil {
+		t.Fatalf("BuildRequest gpt err = %+v, want nil", eErr)
+	}
+	m = decodeReq(t, out)
+	tools, ok = m["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("missing gpt tools: %v", m)
+	}
+	tl, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("gpt tool 0 not an object: %v", tools[0])
+	}
+	if tl["type"] != "custom" {
+		t.Errorf("gpt tools[0].type = %v, want custom (passthrough)", tl["type"])
+	}
+}
+
+func TestBuildRequest_ResponsesToResponses_PreservesRawInputFields(t *testing.T) {
+	body := []byte(`{"input":[
+		{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"Happy Bunny"}},
+		{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"secret_data"}
+	]}`)
+	out, eErr := BuildRequest("muse-spark-1.3-contributor", "openai-response", body, nil)
+	if eErr != nil {
+		t.Fatalf("BuildRequest err = %+v, want nil", eErr)
+	}
+	items := inputItems(t, decodeReq(t, out))
+	if len(items) != 2 {
+		t.Fatalf("items = %d: %v", len(items), items)
+	}
+	ws := itemMap(t, items, 0)
+	if ws["status"] != "completed" {
+		t.Errorf("status = %v, want completed", ws["status"])
+	}
+	act, ok := ws["action"].(map[string]any)
+	if !ok {
+		t.Fatalf("web_search_call action lost: %v", ws)
+	}
+	if act["query"] != "Happy Bunny" {
+		t.Errorf("action.query = %v, want Happy Bunny", act["query"])
+	}
+	rs := itemMap(t, items, 1)
+	if _, ok := rs["summary"]; !ok {
+		t.Errorf("reasoning summary omitted, want [] preserved: %v", rs)
+	}
+	if rs["encrypted_content"] != "secret_data" {
+		t.Errorf("encrypted_content = %v, want secret_data", rs["encrypted_content"])
+	}
+}
+
 func mustBuild(t *testing.T, model, format string, body []byte, ts *pluginapi.ThinkingSupport) []byte {
 	t.Helper()
 	out, eErr := BuildRequest(model, format, body, ts)
