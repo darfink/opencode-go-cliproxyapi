@@ -781,20 +781,18 @@ func TestFromResponses_NamespaceToolIgnored(t *testing.T) {
 }
 
 func TestResponsesReasoningEffortValidated(t *testing.T) {
-	// ts nil → default levels {low,medium,high}: unsupported value rejected
-	// naming it; a supported level forwards verbatim.
-	_, eErr := BuildRequest("m", "openai-response",
-		[]byte(`{"reasoning":{"effort":"xhigh"},"input":"hi"}`), nil)
-	if eErr == nil || eErr.Class != errclass.ClassUnsupported ||
-		!strings.Contains(eErr.Message, `"xhigh"`) {
-		t.Fatalf("unsupported effort err = %+v", eErr)
+	// Transparent router: unlisted efforts pass through without local
+	// validation; upstream is the sole authority.
+	out := mustBuild(t, "openai-response", `{"reasoning":{"effort":"xhigh"},"input":"hi"}`, nil)
+	if out["reasoning_effort"] != "xhigh" {
+		t.Fatalf("passthrough effort = %v, want xhigh", out["reasoning_effort"])
 	}
-	out := mustBuild(t, "openai-response", `{"reasoning":{"effort":"high"},"input":"hi"}`, nil)
+	out = mustBuild(t, "openai-response", `{"reasoning":{"effort":"high"},"input":"hi"}`, nil)
 	if out["reasoning_effort"] != "high" {
 		t.Fatalf("supported effort = %v", out["reasoning_effort"])
 	}
 
-	// ts declaring xhigh admits it.
+	// Normalization still applies regardless of declared capability.
 	ts := &pluginapi.ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh"}}
 	out = mustBuild(t, "openai-response", `{"reasoning":{"effort":"XHigh"},"input":"hi"}`, ts)
 	if out["reasoning_effort"] != "xhigh" {
@@ -998,6 +996,18 @@ func TestFromResponses_CustomToolCallAndOutput(t *testing.T) {
 	tool := msgs[2].(map[string]any)
 	if tool["role"] != "tool" || tool["tool_call_id"] != "call_c1" || tool["content"] != "ok" {
 		t.Fatalf("tool message wrong: %v", tool)
+	}
+}
+
+func TestResponsesReasoningEffortPassthroughWithoutValidation(t *testing.T) {
+	body := `{"reasoning":{"effort":"xhigh"},"input":"hi"}`
+	out, eErr := BuildRequest("gpt-4o", "openai-response", []byte(body), nil)
+	if eErr != nil {
+		t.Fatalf("BuildRequest err = %+v, want nil (passthrough xhigh)", eErr)
+	}
+	m := decodeOut(t, out, nil)
+	if m["reasoning_effort"] != "xhigh" {
+		t.Fatalf("reasoning_effort = %v, want xhigh", m["reasoning_effort"])
 	}
 }
 

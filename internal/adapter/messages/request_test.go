@@ -540,14 +540,15 @@ func TestChatCompletionsEmptyArgsToolImagesDefaultSchema(t *testing.T) {
 }
 
 func TestChatCompletionsUnknownEffort(t *testing.T) {
-	_, eErr := chatReq(t, `{"messages":[{"role":"user","content":"a"}],"reasoning_effort":"maximum"}`)
-	if eErr == nil || eErr.Class != errclass.ClassUnsupported {
-		t.Fatalf("want ClassUnsupported, got %+v", eErr)
+	// Transparent router: unlisted efforts pass through without local
+	// validation; upstream is the sole authority. Unknown levels resolve
+	// to no thinking block rather than a descriptive rejection.
+	if _, eErr := chatReq(t, `{"messages":[{"role":"user","content":"a"}],"reasoning_effort":"maximum"}`); eErr != nil {
+		t.Fatalf("maximum: want nil (passthrough), got %+v", eErr)
 	}
-	// undeclared canonical levels are rejected explicitly too (FR-005).
-	_, eErr = chatReq(t, `{"messages":[{"role":"user","content":"a"}],"reasoning_effort":"max"}`)
-	if eErr == nil || eErr.Class != errclass.ClassUnsupported {
-		t.Fatalf("undeclared max: want ClassUnsupported, got %+v", eErr)
+	// undeclared canonical levels pass through too (FR-005).
+	if _, eErr := chatReq(t, `{"messages":[{"role":"user","content":"a"}],"reasoning_effort":"max"}`); eErr != nil {
+		t.Fatalf("undeclared max: want nil (passthrough), got %+v", eErr)
 	}
 }
 
@@ -993,6 +994,18 @@ func TestParallelFalseNoneStillUnsupported(t *testing.T) { // row 7
 		!strings.Contains(eErr.Message, `"none"`) {
 		t.Fatalf("err = %v", eErr)
 	}
+}
+
+func TestFromResponses_ReasoningEffortPassthroughWithoutValidation(t *testing.T) {
+	body := `{"input":"hi","reasoning":{"effort":"xhigh"}}`
+	out, eErr := BuildRequest("claude-3-7-sonnet", "openai-response", []byte(body), nil)
+	if eErr != nil {
+		if eErr.Class == errclass.ClassUnsupported {
+			t.Fatalf("BuildRequest rejected xhigh with ClassUnsupported: %+v", eErr)
+		}
+		t.Fatalf("BuildRequest err = %+v, want nil (passthrough xhigh)", eErr)
+	}
+	_ = decodeReq(t, out)
 }
 
 func TestFromResponses_CustomToolCallAndOutput(t *testing.T) {
