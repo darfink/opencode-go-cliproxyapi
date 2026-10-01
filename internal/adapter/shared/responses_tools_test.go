@@ -301,3 +301,113 @@ func TestNormalizeToolChoicePassthrough(t *testing.T) {
 		t.Fatalf("registry = %+v", got)
 	}
 }
+
+func TestNormalizeCustomToolBecomesFunction(t *testing.T) {
+	r := &ResponsesRequest{Tools: []RespTool{{Type: "custom", Name: "exec"}}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/chat/completions"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(r.Tools) != 1 {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+	tool := r.Tools[0]
+	if tool.Type != "function" {
+		t.Fatalf("type = %q want %q", tool.Type, "function")
+	}
+	if tool.Name != "exec" {
+		t.Fatalf("name = %q want %q", tool.Name, "exec")
+	}
+	var params map[string]any
+	if err := json.Unmarshal(tool.Parameters, &params); err != nil {
+		t.Fatalf("parameters unmarshal %s: %v", string(tool.Parameters), err)
+	}
+	if params["type"] != "object" {
+		t.Fatalf("parameters.type = %+v", params)
+	}
+	props, ok := params["properties"].(map[string]any)
+	if !ok || len(props) != 0 {
+		t.Fatalf("parameters.properties = %+v", params)
+	}
+}
+
+func TestNormalizeWebSearchDropped(t *testing.T) {
+	r := &ResponsesRequest{Tools: []RespTool{
+		{Type: "web_search"},
+		{Type: "web_search_preview"},
+		{Type: "function", Name: "f1"},
+	}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/chat/completions"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(r.Tools) != 1 || r.Tools[0].Name != "f1" {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+	// Same drop applies on the messages route; native responses preserves.
+	r = &ResponsesRequest{Tools: []RespTool{
+		{Type: "web_search"},
+		{Type: "web_search_preview"},
+		{Type: "function", Name: "f1"},
+	}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/messages"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(r.Tools) != 1 || r.Tools[0].Name != "f1" {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+	r = &ResponsesRequest{Tools: []RespTool{
+		{Type: "web_search"},
+		{Type: "web_search_preview"},
+		{Type: "function", Name: "f1"},
+	}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/responses"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(r.Tools) != 3 {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+	// Namespace children drop identically on translated routes.
+	r = &ResponsesRequest{Tools: []RespTool{{
+		Type: "namespace", Name: "ns",
+		Tools: []RespTool{{Type: "web_search"}, {Type: "function", Name: "f1"}},
+	}}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/chat/completions"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(r.Tools) != 1 || r.Tools[0].Name != "ns__f1" {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+}
+
+func TestNormalizeApplyPatchDropped(t *testing.T) {
+	r := &ResponsesRequest{Tools: []RespTool{{Type: "custom", Name: "apply_patch"}}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/chat/completions"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	for _, tool := range r.Tools {
+		if tool.Name == "apply_patch" {
+			t.Fatalf("apply_patch not dropped: %+v", r.Tools)
+		}
+	}
+	if len(r.Tools) != 0 {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+}
+
+func TestNormalizeNamespaceCustomChildUnrolled(t *testing.T) {
+	r := &ResponsesRequest{Tools: []RespTool{{
+		Type: "namespace", Name: "subagents",
+		Tools: []RespTool{{Type: "custom", Name: "custom_sub"}},
+	}}}
+	if _, eErr := NewResponseTools().Normalize(r, "/v1/chat/completions"); eErr != nil {
+		t.Fatalf("Normalize: %v", eErr)
+	}
+	if len(r.Tools) != 1 {
+		t.Fatalf("tools = %+v", r.Tools)
+	}
+	if r.Tools[0].Type != "function" {
+		t.Fatalf("type = %q want %q", r.Tools[0].Type, "function")
+	}
+	if r.Tools[0].Name != "subagents__custom_sub" {
+		t.Fatalf("name = %q want %q", r.Tools[0].Name, "subagents__custom_sub")
+	}
+}

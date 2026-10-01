@@ -580,10 +580,18 @@ func TestResponsesErrors(t *testing.T) {
 			t.Errorf("%s: want ClassUnsupported, got %+v", c.name, eErr)
 		}
 	}
-	// A non-function tool type is unsupported_protocol_or_parameter (FR-009).
-	_, eErr := respReq(t, `{"tools":[{"type":"web_search"}],"input":[]}`)
-	if eErr == nil || eErr.Class != errclass.ClassUnsupported {
-		t.Errorf("non-function tool: want ClassUnsupported, got %+v", eErr)
+	// Hosted web search tools are dropped on the Messages route
+	// (no function-calling equivalent); function tools proceed.
+	m, eErr := respReq(t, `{"tools":[{"type":"web_search"},{"type":"web_search_preview"},{"type":"function","name":"f"}],"input":[]}`)
+	if eErr != nil {
+		t.Fatalf("unexpected error: %v", eErr)
+	}
+	tools, ok := m["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("web_search not dropped: %v", m["tools"])
+	}
+	if tools[0].(map[string]any)["name"] != "f" {
+		t.Fatalf("function tool lost: %v", m["tools"])
 	}
 }
 

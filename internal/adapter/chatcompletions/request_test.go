@@ -704,10 +704,16 @@ func TestBuildRequestResponsesErrors(t *testing.T) {
 			}
 		})
 	}
-	// A non-function tool type is unsupported_protocol_or_parameter (FR-009).
-	_, eErr := BuildRequest("m", "openai-response", []byte(`{"tools":[{"type":"web_search"}]}`), nil)
-	if eErr == nil || eErr.Class != errclass.ClassUnsupported {
-		t.Fatalf("unsupported tool type: want ClassUnsupported, got %+v", eErr)
+	// Hosted web search tools are dropped on the Chat Completions route
+	// (no function-calling equivalent); function tools proceed.
+	m := mustBuild(t, "openai-response",
+		`{"tools":[{"type":"web_search"},{"type":"web_search_preview"},{"type":"function","name":"f"}],"input":"hi"}`, nil)
+	tools, ok := m["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("web_search not dropped: %v", m["tools"])
+	}
+	if tools[0].(map[string]any)["function"].(map[string]any)["name"] != "f" {
+		t.Fatalf("function tool lost: %v", m["tools"])
 	}
 }
 

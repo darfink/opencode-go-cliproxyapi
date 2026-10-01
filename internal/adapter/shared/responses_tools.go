@@ -60,6 +60,31 @@ func qualifiedToolName(name, namespace string) string {
 	return qualified
 }
 
+// normalizeCustomTool drops client-only tools (apply_patch, tool_search,
+// image_generation) and, on translated routes, hosted web search tools
+// (web_search, web_search_preview) with no function-calling equivalent. It
+// rewrites generic custom tools to functions with a default empty-object
+// parameters schema. It reports false when the tool must be dropped.
+func normalizeCustomTool(tool *RespTool, target string) bool {
+	if tool.Type == "custom" && tool.Name == "apply_patch" {
+		return false
+	}
+	if tool.Type == "tool_search" || tool.Type == "image_generation" {
+		return false
+	}
+	if (target == "/v1/chat/completions" || target == "/v1/messages") &&
+		(tool.Type == "web_search" || tool.Type == "web_search_preview") {
+		return false
+	}
+	if tool.Type == "custom" {
+		tool.Type = "function"
+		if len(tool.Parameters) == 0 {
+			tool.Parameters = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+	}
+	return true
+}
+
 // Normalize merges additional_tools input items into r.Tools, unrolls
 // namespace tools to flattened function tools, and rewrites historical
 // function_call items plus a namespaced tool_choice to wire names. It
@@ -87,6 +112,9 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 	var flat []RespTool
 	for _, tool := range r.Tools {
 		if tool.Type != "namespace" {
+			if !normalizeCustomTool(&tool, target) {
+				continue
+			}
 			flat = append(flat, tool)
 			continue
 		}
@@ -94,6 +122,9 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 			return nil, errclass.Translation("namespace tool requires a name and tools array")
 		}
 		for _, child := range tool.Tools {
+			if !normalizeCustomTool(&child, target) {
+				continue
+			}
 			if eErr := FunctionTool(child.Type, target); eErr != nil {
 				return nil, eErr
 			}
