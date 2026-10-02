@@ -169,6 +169,9 @@ func TestBuildRequest_ResponsesToResponses_NonGPTNormalized(t *testing.T) {
 }
 
 func TestBuildRequest_ResponsesToResponses_PreservesRawInputFields(t *testing.T) {
+	// reasoning items are dropped for non-GPT upstreams (see
+	// TestBuildRequest_ResponsesToResponses_ReasoningItemDropped); only
+	// web_search_call and other non-reasoning items survive.
 	body := []byte(`{"input":[
 		{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"Happy Bunny"}},
 		{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"secret_data"}
@@ -178,7 +181,7 @@ func TestBuildRequest_ResponsesToResponses_PreservesRawInputFields(t *testing.T)
 		t.Fatalf("BuildRequest err = %+v, want nil", eErr)
 	}
 	items := inputItems(t, decodeReq(t, out))
-	if len(items) != 2 {
+	if len(items) != 1 {
 		t.Fatalf("items = %d: %v", len(items), items)
 	}
 	ws := itemMap(t, items, 0)
@@ -191,13 +194,6 @@ func TestBuildRequest_ResponsesToResponses_PreservesRawInputFields(t *testing.T)
 	}
 	if act["query"] != "Happy Bunny" {
 		t.Errorf("action.query = %v, want Happy Bunny", act["query"])
-	}
-	rs := itemMap(t, items, 1)
-	if _, ok := rs["summary"]; !ok {
-		t.Errorf("reasoning summary omitted, want [] preserved: %v", rs)
-	}
-	if rs["encrypted_content"] != "secret_data" {
-		t.Errorf("encrypted_content = %v, want secret_data", rs["encrypted_content"])
 	}
 }
 
@@ -223,6 +219,7 @@ func TestBuildRequest_ResponsesToResponses_FunctionCallEmptyArgs(t *testing.T) {
 }
 
 func TestBuildRequest_ResponsesToResponses_CompactionDropped(t *testing.T) {
+	// Both compaction and reasoning items are dropped for non-GPT upstreams.
 	body := []byte(`{"input":[
 		{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
 		{"type":"compaction","encrypted_content":"blob"},
@@ -233,13 +230,69 @@ func TestBuildRequest_ResponsesToResponses_CompactionDropped(t *testing.T) {
 		t.Fatalf("BuildRequest err = %+v, want nil", eErr)
 	}
 	items := inputItems(t, decodeReq(t, out))
-	if len(items) != 2 {
+	if len(items) != 1 {
 		t.Fatalf("items = %d: %v", len(items), items)
 	}
 	for _, item := range items {
-		if im, ok := item.(map[string]any); ok && im["type"] == "compaction" {
-			t.Fatalf("compaction not dropped: %v", items)
+		if im, ok := item.(map[string]any); ok && (im["type"] == "compaction" || im["type"] == "reasoning") {
+			t.Fatalf("compaction/reasoning not dropped: %v", items)
 		}
+	}
+}
+
+// TestBuildRequest_ResponsesToResponses_ReasoningItemDropped asserts that
+// historical `reasoning` input items containing encrypted blobs are dropped
+// when forwarding to non-GPT Responses models (e.g. grok, muse-spark).
+// Non-GPT upstreams cannot decrypt foreign pooled blobs, so they must be
+// stripped before the request is forwarded (matching the compaction-drop
+// policy).  For GPT models the passthrough path is taken and reasoning items
+// are preserved verbatim.
+//
+// RED: currently FAILS because the default branch in fromResponsesNormalized
+// preserves all unrecognised item types, including "reasoning".
+func TestBuildRequest_ResponsesToResponses_ReasoningItemDropped(t *testing.T) {
+	body := []byte(`{"input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+		{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"blob"},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}
+	]}`)
+
+	// Non-GPT model: reasoning item must be dropped.
+	out, eErr := BuildRequest("grok-4.6", "openai-response", body, nil)
+	if eErr != nil {
+		t.Fatalf("BuildRequest err = %+v, want nil", eErr)
+	}
+	items := inputItems(t, decodeReq(t, out))
+	for _, item := range items {
+		if im, ok := item.(map[string]any); ok && im["type"] == "reasoning" {
+			t.Fatalf("reasoning item not dropped for non-GPT model: %v", items)
+		}
+	}
+
+	// GPT model: passthrough path — reasoning item must be preserved.
+	out, eErr = BuildRequest("gpt-6-luna", "openai-response", body, nil)
+	if eErr != nil {
+		t.Fatalf("BuildRequest gpt err = %+v, want nil", eErr)
+	}
+	m := decodeReq(t, out)
+	rawInput, ok := m["input"]
+	if !ok {
+		t.Fatalf("gpt passthrough: missing input field: %v", m)
+	}
+	gptItems, ok := rawInput.([]any)
+	if !ok {
+		// GPT passthrough may keep input as a raw string — accept it.
+		return
+	}
+	found := false
+	for _, item := range gptItems {
+		if im, ok := item.(map[string]any); ok && im["type"] == "reasoning" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("reasoning item lost on GPT passthrough: %v", gptItems)
 	}
 }
 

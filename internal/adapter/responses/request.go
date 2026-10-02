@@ -135,8 +135,8 @@ func fromResponsesNormalized(upstreamModel string, sourceBody []byte, tools ...*
 						return nil, errclass.Translation("failed to encode normalized Responses request: " + err.Error())
 					}
 					preserved = append(preserved, b)
-				case "compaction":
-					// Dropped: non-GPT upstreams reject compaction blobs.
+				case "compaction", "reasoning":
+					// Dropped: non-GPT upstreams reject historical reasoning and compaction blobs.
 				case "function_call":
 					var m map[string]json.RawMessage
 					if err := json.Unmarshal(item, &m); err != nil {
