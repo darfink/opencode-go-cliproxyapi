@@ -23,6 +23,7 @@ import (
 	"opencode-go-cliproxyapi/internal/adapter/chatcompletions"
 	"opencode-go-cliproxyapi/internal/adapter/messages"
 	"opencode-go-cliproxyapi/internal/adapter/responses"
+	"opencode-go-cliproxyapi/internal/adapter/responsescompat"
 	"opencode-go-cliproxyapi/internal/adapter/shared"
 	"opencode-go-cliproxyapi/internal/catalog"
 	"opencode-go-cliproxyapi/internal/config"
@@ -126,7 +127,13 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	if int64(len(resp.Body)) > res.cfg.MaxResponseBytes {
 		return classEnvelope(errclass.Translation("response exceeds max-response-bytes")), nil
 	}
-	converted, eErr := convertNonStream(res.rec.Protocol, req.SourceFormat, resp.StatusCode, resp.Body, &res.tools)
+	var converted []byte
+	if usesResponsesCompat(res.rec.Protocol, req.SourceFormat, res.rec.UpstreamID) {
+		conv := newResponsesTranslator(res.rec.Protocol, res.rec.UpstreamID, req.OriginalRequest, upstreamBody)
+		converted, eErr = conv.ConvertNonStream(resp.StatusCode, resp.Body)
+	} else {
+		converted, eErr = convertNonStream(res.rec.Protocol, req.SourceFormat, resp.StatusCode, resp.Body, &res.tools)
+	}
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
@@ -134,6 +141,12 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 }
 
 func buildUpstreamRequest(route catalog.Route, upstreamModel, sourceFormat string, sourceBody []byte, ts *pluginapi.ThinkingSupport, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+	if usesResponsesCompat(route, sourceFormat, upstreamModel) {
+		if route == catalog.RouteResponses {
+			return responsescompat.BuildNativeRequest(upstreamModel, sourceBody)
+		}
+		return responsescompat.BuildRequest(route, upstreamModel, sourceBody, ts)
+	}
 	switch route {
 	case catalog.RouteChatCompletions:
 		return chatcompletions.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts, tools...)
@@ -143,6 +156,29 @@ func buildUpstreamRequest(route catalog.Route, upstreamModel, sourceFormat strin
 		return responses.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts, tools...)
 	}
 	return nil, errclass.Translation("unsupported route")
+}
+
+func usesResponsesCompat(route catalog.Route, sourceFormat, model string) bool {
+	if sourceFormat != "openai-response" {
+		return false
+	}
+	if route == catalog.RouteChatCompletions || route == catalog.RouteMessages {
+		return true
+	}
+	model = strings.ToLower(model)
+	return route == catalog.RouteResponses && (strings.HasPrefix(model, "muse-spark") || strings.HasPrefix(model, "grok"))
+}
+
+type responsesTranslator interface {
+	streamConverter
+	ConvertNonStream(status int, body []byte) ([]byte, *errclass.Error)
+}
+
+func newResponsesTranslator(route catalog.Route, model string, original, upstream []byte) responsesTranslator {
+	if route == catalog.RouteResponses {
+		return responsescompat.NewNative(model, original)
+	}
+	return responsescompat.New(route, model, original, upstream)
 }
 
 func upstreamAuthHeaders(route catalog.Route, key, sessionID string) http.Header {
@@ -382,19 +418,14 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		return classEnvelope(errclass.FromNetwork(err)), nil
 	}
 	if st >= 400 {
-		var body []byte
-		if id != "" {
-			watchdog := time.AfterFunc(res.cfg.RequestTimeout, func() {
-				_ = m.bridge.StreamClose(id)
-			})
-			body, _, _, _ = m.bridge.StreamRead(id)
-			watchdog.Stop()
-			_ = m.bridge.StreamClose(id)
-		}
-		return classEnvelope(shared.UpstreamStatusError(st, body)), nil
+		return classEnvelope(m.streamStatusError(ctx, st, id, res.cfg.MaxResponseBytes)), nil
 	}
 
 	downID := req.StreamID
+	conv := newStreamConverter(res.rec.Protocol, req.SourceFormat, &res.tools)
+	if usesResponsesCompat(res.rec.Protocol, req.SourceFormat, res.rec.UpstreamID) {
+		conv = newResponsesTranslator(res.rec.Protocol, res.rec.UpstreamID, req.OriginalRequest, upstreamBody)
+	}
 	if m.bridge != nil {
 		m.bridge.inFlight.Add(1)
 	}
@@ -402,12 +433,42 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		if m.bridge != nil {
 			defer m.bridge.inFlight.Done()
 		}
-		m.pumpStream(downID, id, res, req.SourceFormat)
+		m.pumpStream(downID, id, res, conv)
 	}()
 	return okEnvelope(struct{}{}), nil
 }
 
-func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, sourceFormat string) {
+// streamStatusError reads only a bounded error body before releasing the host
+// stream. Returning an empty message makes the host report "plugin call failed",
+// hiding the provider's validation error and its retry/quota classification.
+func (m *Manager) streamStatusError(ctx context.Context, status int, upstreamID string, maxBytes int64) *errclass.Error {
+	if upstreamID == "" {
+		return shared.UpstreamStatusError(status, nil)
+	}
+	var closeOnce sync.Once
+	closeStream := func() {
+		closeOnce.Do(func() { _ = m.bridge.StreamClose(upstreamID) })
+	}
+	defer closeStream()
+	// StreamRead itself has no deadline; closing its host stream unblocks it.
+	stopClose := context.AfterFunc(ctx, closeStream)
+	defer stopClose()
+	limit := 4096
+	if maxBytes < int64(limit) {
+		limit = int(maxBytes)
+	}
+	var body []byte
+	for ctx.Err() == nil && len(body) < limit {
+		payload, readErrMsg, done, err := m.bridge.StreamRead(upstreamID)
+		body = append(body, payload[:min(len(payload), limit-len(body))]...)
+		if err != nil || readErrMsg != "" || done {
+			break
+		}
+	}
+	return shared.UpstreamStatusError(status, body)
+}
+
+func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, conv streamConverter) {
 	var closeOnce sync.Once
 	closeStreams := func(downErrMsg string) {
 		closeOnce.Do(func() {
@@ -429,7 +490,6 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 	})
 	defer watchdog.Stop()
 
-	conv := newStreamConverter(res.rec.Protocol, sourceFormat, &res.tools)
 	var (
 		total          int64
 		upstreamClosed bool

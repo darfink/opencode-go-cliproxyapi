@@ -1,3 +1,15 @@
+## Local Responses Compatibility
+
+- Reuse the CLIProxyAPI SDK tool index for Codex Responses requests on Chat Completions and Messages routes.
+- Normalize namespaced and custom tools on native Muse Spark and Grok Responses routes.
+- Preserve native Responses fields, reasoning controls, media, usage, and hosted tools.
+- Remove the unsupported `search_content_types` field from Muse Spark search tools.
+- Preserve custom tool identities through requests, responses, streaming, and tool-result history.
+- Return bounded, redacted provider errors when streaming requests fail before the first response byte.
+- Close stalled error reads when the request times out.
+
+These fixes remain local and separate from the reasoning metadata and v8 integration commits.
+
 ## Local Reasoning Metadata
 
 - Publish verified reasoning levels when OpenCode Go omits model metadata.

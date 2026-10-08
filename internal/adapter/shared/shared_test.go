@@ -351,12 +351,30 @@ func TestUpstreamStatusError(t *testing.T) {
 		{[]byte(`{"error":{"message":"Bearer sk-secret-123 failed"}}`), "Bearer [redacted] failed"},
 		{[]byte(`{"error":{"type":"invalid_request"}}`), `{"error":{"type":"invalid_request"}}`},
 		{[]byte(`{"other":123}`), `{"other":123}`},
-		{[]byte(``), ""},
+		{[]byte(``), "upstream returned HTTP 400"},
 	}
 	for _, tc := range cases {
 		e := UpstreamStatusError(400, tc.body)
 		if e.Message != tc.want {
 			t.Errorf("UpstreamStatusError(400, %s) = %q, want %q", tc.body, e.Message, tc.want)
+		}
+	}
+}
+
+func TestUpstreamStatusErrorMessage(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want string
+	}{
+		{`{"model":"muse-spark-1.3-contributor","error":{"message":"unsupported search selector"}}`, "unsupported search selector"},
+		{`{"error":{"message":"Bearer sk-secret-123 invalid"}}`, "Bearer [redacted] invalid"},
+		{`{"error":{"message":""}}`, `{"error":{"message":""}}`},
+		{`{"error":"invalid"}`, "invalid"},
+		{"", "upstream returned HTTP 400"},
+		{" \n", "upstream returned HTTP 400"},
+	} {
+		if got := UpstreamStatusError(400, []byte(tc.body)); got.Message != tc.want {
+			t.Fatalf("message = %q, want %q", got.Message, tc.want)
 		}
 	}
 }

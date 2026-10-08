@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -782,6 +783,88 @@ func TestExecuteStream4xxClosesUpstreamEntry(t *testing.T) {
 	}
 }
 
+func TestExecuteStreamStatusErrorDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		frames  []string
+		readErr error
+		want    string
+		class   errclass.Class
+		reads   int
+	}{
+		{"fragmented JSON", 400, []string{`{"model":"muse-spark-1.3-contributor",`, `"error":{"message":"unsupported search selector"}}`}, nil, "unsupported search selector", errclass.ClassUnsupported, 3},
+		{"redacted JSON", 400, []string{`{"error":{"message":"Bearer sk-secret invalid"}}`}, nil, "Bearer [redacted] invalid", errclass.ClassUnsupported, 2},
+		{"quota", 429, []string{`{"error":{"message":"quota exhausted"}}`}, nil, "quota exhausted", errclass.ClassQuota, 2},
+		{"bounded body", 500, []string{strings.Repeat("x", 8192), "must not read"}, nil, strings.Repeat("x", 256) + "...", errclass.ClassUpstream, 1},
+		{"empty body", 400, nil, nil, "upstream returned HTTP 400", errclass.ClassUnsupported, 1},
+		{"read failure", 400, nil, errors.New("read failed"), "upstream returned HTTP 400", errclass.ClassUnsupported, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, f := newStreamManager(t, streamScript{startStatus: tc.status, upstreamID: "up-error", frames: tc.frames, readErr: tc.readErr})
+			resp, err := m.HandleCall("executor.execute_stream",
+				execStreamReqBody("opencode-go/glm-5.3", "openai", []byte(ccRequestBody), "down-error"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := decodeEnv(t, resp)
+			if env.OK || env.Error == nil || env.Error.Message != tc.want || env.Error.Code != string(tc.class) || env.Error.HTTPStatus != tc.status {
+				t.Fatalf("error envelope = %+v", env.Error)
+			}
+			if got := len(f.callsOf(pluginabi.MethodHostHTTPStreamRead)); got != tc.reads {
+				t.Fatalf("reads = %d, want %d", got, tc.reads)
+			}
+			if got := len(f.callsOf(pluginabi.MethodHostHTTPStreamClose)); got != 1 {
+				t.Fatalf("upstream closes = %d, want 1", got)
+			}
+			if len(f.callsOf(pluginabi.MethodHostStreamEmit)) != 0 || len(f.callsOf(pluginabi.MethodHostStreamClose)) != 0 {
+				t.Fatal("pre-first-byte error changed the downstream stream")
+			}
+		})
+	}
+}
+
+func TestStreamStatusErrorCancellation(t *testing.T) {
+	reading, closed := make(chan struct{}), make(chan struct{})
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		switch method {
+		case pluginabi.MethodHostHTTPStreamRead:
+			close(reading)
+			select {
+			case <-closed:
+			case <-time.After(time.Second):
+				return nil, errors.New("test read timed out")
+			}
+			return hostOK(hostStreamReadResp{Done: true}), nil
+		case pluginabi.MethodHostHTTPStreamClose:
+			close(closed)
+		}
+		return hostOK(map[string]any{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan *errclass.Error, 1)
+	go func() { result <- m.streamStatusError(ctx, 400, "up-error", 4096) }()
+	select {
+	case <-reading:
+	case <-time.After(time.Second):
+		t.Fatal("error reader did not start")
+	}
+	cancel()
+	select {
+	case eErr := <-result:
+		if eErr.StatusCode != 400 || eErr.Message == "" {
+			t.Fatalf("error = %+v", eErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not unblock error reader")
+	}
+	if got := len(f.callsOf(pluginabi.MethodHostHTTPStreamClose)); got != 1 {
+		t.Fatalf("upstream closes = %d, want 1", got)
+	}
+}
+
 func TestExecuteStream4xxExtractsUpstreamMessage(t *testing.T) {
 	errMsg := `{"error":{"message":"Invalid temperature: 999.0. Value must be between 0.0 and 2.0","type":"invalid_request_error"}}`
 	m, f := newStreamManager(t, streamScript{
@@ -801,8 +884,9 @@ func TestExecuteStream4xxExtractsUpstreamMessage(t *testing.T) {
 	if !strings.Contains(env.Error.Message, "Invalid temperature: 999.0") {
 		t.Fatalf("error message = %q, want upstream explanation", env.Error.Message)
 	}
-	if got := len(f.callsOf(pluginabi.MethodHostHTTPStreamRead)); got != 1 {
-		t.Fatalf("stream reads = %d, want 1", got)
+	// Read the body and terminal chunk so fragmented error payloads also work.
+	if got := len(f.callsOf(pluginabi.MethodHostHTTPStreamRead)); got != 2 {
+		t.Fatalf("stream reads = %d, want 2", got)
 	}
 	if got := len(f.callsOf(pluginabi.MethodHostHTTPStreamClose)); got != 1 {
 		t.Fatalf("stream closes = %d, want 1", got)
