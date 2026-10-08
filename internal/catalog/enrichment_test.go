@@ -11,7 +11,7 @@ import (
 	"opencode-go-cliproxyapi/internal/config"
 )
 
-func TestVerifiedModelThinking(t *testing.T) {
+func TestModelEnrichmentReasoningEfforts(t *testing.T) {
 	for _, tc := range []struct {
 		id     string
 		levels string
@@ -59,7 +59,7 @@ func TestVerifiedModelThinking(t *testing.T) {
 	}
 }
 
-func TestUpstreamThinkingOverridesVerifiedFallback(t *testing.T) {
+func TestProviderThinkingOverridesBuiltinEnrichment(t *testing.T) {
 	for _, raw := range []string{
 		`{"levels":["low","max"],"min":1000,"max":64000,"zero_allowed":true,"dynamic_allowed":true}`,
 		`{"min":1024}`,
@@ -81,7 +81,7 @@ func TestUpstreamThinkingOverridesVerifiedFallback(t *testing.T) {
 	}
 }
 
-func TestVerifiedThinkingOnlyOnAuditedRoutes(t *testing.T) {
+func TestBuiltinEnrichmentOnlyOnAuditedRoutes(t *testing.T) {
 	for _, override := range []config.RouteOverride{
 		{Protocol: "chat-completions", Endpoint: "/v1/chat/completions"},
 		{Protocol: "responses", Endpoint: "/v1/custom-responses"},
@@ -92,8 +92,8 @@ func TestVerifiedThinkingOnlyOnAuditedRoutes(t *testing.T) {
 			m := newManager(cfg, &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200,
 				Body: []byte(`{"data":[{"id":"muse-spark-1.3-contributor"}]}`)}})
 			mustRefresh(t, m)
-			if got := findModel(t, m.Models(), "muse-spark-1.3-contributor").Thinking; got != nil {
-				t.Fatalf("unaudited override inherited thinking: %+v", got)
+			if got := findModel(t, m.Models(), "muse-spark-1.3-contributor"); got.Thinking != nil || got.ContextLimit != 0 {
+				t.Fatalf("unaudited override inherited enrichment: %+v", got)
 			}
 		})
 	}
@@ -107,5 +107,66 @@ func TestUnknownVariantsKeepAbsentThinking(t *testing.T) {
 		if model.Thinking != nil {
 			t.Fatalf("unknown or budget-based model inherited thinking: %+v", model)
 		}
+	}
+}
+
+func TestConfiguredEnrichmentOverridesProviderMetadata(t *testing.T) {
+	cfg, err := config.Load([]byte(`api-keys: [{value: test-key}]
+model-enrichments:
+  muse-spark-1.3-contributor:
+    reasoning-efforts: [high, ultra]
+    context-window: 524288
+    hosted-web-search: disabled
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(cfg, &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"data":[
+  {"id":"muse-spark-1.3-contributor","context_length":131072,"thinking":{"levels":["low"],"min":1024,"max":64000,"zero_allowed":true,"dynamic_allowed":true}},
+  {"id":"grok-4.7","context_length":4096,"thinking":{"levels":["low"]}}]}`)}})
+	mustRefresh(t, m)
+	got := findModel(t, m.Models(), "muse-spark-1.3-contributor")
+	if got.ContextLimit != 524_288 || got.HostedWebSearch != config.HostedWebSearchDisabled || got.Thinking.Min != 1024 || got.Thinking.Max != 64000 ||
+		got.Thinking.ZeroAllowed || got.Thinking.DynamicAllowed || !reflect.DeepEqual(got.Thinking.Levels, []string{"high", "ultra"}) {
+		t.Fatalf("configured enrichment = %+v, thinking %+v", got, got.Thinking)
+	}
+	other := findModel(t, m.Models(), "grok-4.7")
+	if other.ContextLimit != 4096 || other.HostedWebSearch != config.HostedWebSearchEnabled || !reflect.DeepEqual(other.Thinking.Levels, []string{"low"}) {
+		t.Fatalf("unrelated model changed: %+v", other)
+	}
+	got.Thinking.Levels[0] = "mutated"
+	mustRefresh(t, m)
+	if !reflect.DeepEqual(findModel(t, m.Models(), "muse-spark-1.3-contributor").Thinking.Levels, []string{"high", "ultra"}) {
+		t.Fatal("snapshot mutated configured enrichment")
+	}
+}
+
+func TestPartialEnrichmentInheritsAndDiscoveryRemainsDynamic(t *testing.T) {
+	cfg, err := config.Load([]byte(`api-keys: [{value: test-key}]
+model-enrichments:
+  muse-spark-1.3-contributor:
+    hosted-web-search: disabled
+  gpt-future:
+    reasoning-efforts: [none, max, auto]
+    context-window: 131072
+  gpt-not-discovered:
+    context-window: 4096
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(cfg, &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"data":[{"id":"muse-spark-1.3-contributor"},{"id":"gpt-future"}]}`)}})
+	mustRefresh(t, m)
+	if len(m.Models()) != 2 {
+		t.Fatal("enrichment added an undiscovered model")
+	}
+	muse := findModel(t, m.Models(), "muse-spark-1.3-contributor")
+	if muse.ContextLimit != 1_048_576 || muse.HostedWebSearch != config.HostedWebSearchDisabled ||
+		strings.Join(muse.Thinking.Levels, ",") != "minimal,low,medium,high,xhigh,max" {
+		t.Fatalf("partial enrichment lost built-in fields: %+v", muse)
+	}
+	future := findModel(t, m.Models(), "gpt-future")
+	if future.ContextLimit != 131_072 || future.HostedWebSearch != config.HostedWebSearchEnabled || !future.Thinking.ZeroAllowed || !future.Thinking.DynamicAllowed {
+		t.Fatalf("unknown model enrichment = %+v", future)
 	}
 }

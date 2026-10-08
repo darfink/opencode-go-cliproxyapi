@@ -57,37 +57,42 @@ func TestNativeRequestToolNormalization(t *testing.T) {
 
 func TestNativeRequestHistoryCompatibility(t *testing.T) {
 	for _, model := range []string{"muse-spark-1.3-contributor", "grok-4.7"} {
-		for _, tc := range []struct{ name, args, want string }{
-			{"missing", "", "{}"},
-			{"empty", `,"arguments":""`, "{}"},
-			{"null", `,"arguments":null`, "{}"},
-			{"whitespace", `,"arguments":"   "`, "{}"},
-			{"valid", `,"arguments":"{\"n\":1}"`, `{"n":1}`},
-		} {
-			t.Run(model+"/"+tc.name, func(t *testing.T) {
-				body := []byte(`{"reasoning":{"effort":"max"},"input":[
+		for _, disabled := range []bool{false, true} {
+			for _, tc := range []struct{ name, args, want string }{
+				{"missing", "", "{}"},
+				{"empty", `,"arguments":""`, "{}"},
+				{"null", `,"arguments":null`, "{}"},
+				{"whitespace", `,"arguments":"   "`, "{}"},
+				{"valid", `,"arguments":"{\"n\":1}"`, `{"n":1}`},
+			} {
+				t.Run(model+"/disabled="+strconv.FormatBool(disabled)+"/"+tc.name, func(t *testing.T) {
+					body := []byte(`{"reasoning":{"effort":"max"},"input":[
 					{"type":"reasoning","encrypted_content":"opaque"},
 					{"type":"compaction","encrypted_content":"pooled-blob"},
 					{"type":"function_call","call_id":"f","name":"exec"` + tc.args + `},
 					{"type":"function_call_output","call_id":"f","output":[{"type":"input_text","text":"ok"}]},
 					{"type":"web_search_call","id":"ws","action":{"type":"search","query":"q"}}]}`)
-				out, eErr := BuildNativeRequest(model, body)
-				if eErr != nil {
-					t.Fatal(eErr)
-				}
-				got := decodeObject(t, out)
-				input := got["input"].([]any)
-				if len(input) != 3 || bytes.Contains(out, []byte("encrypted_content")) || got["reasoning"].(map[string]any)["effort"] != "max" {
-					t.Fatalf("native history compatibility = %s", out)
-				}
-				if input[0].(map[string]any)["arguments"] != tc.want {
-					t.Fatalf("historical arguments = %s, want %s", out, tc.want)
-				}
-				src := decodeObject(t, body)["input"].([]any)
-				if !reflect.DeepEqual(input[1:], src[3:]) {
-					t.Fatalf("tool results or hosted history changed: %s", out)
-				}
-			})
+					out, eErr := BuildNativeRequest(model, body)
+					if eErr == nil && disabled {
+						out, eErr = FilterHostedWebSearch(out)
+					}
+					if eErr != nil {
+						t.Fatal(eErr)
+					}
+					got := decodeObject(t, out)
+					input := got["input"].([]any)
+					if len(input) != 3 || bytes.Contains(out, []byte("encrypted_content")) || got["reasoning"].(map[string]any)["effort"] != "max" {
+						t.Fatalf("native history compatibility = %s", out)
+					}
+					if input[0].(map[string]any)["arguments"] != tc.want {
+						t.Fatalf("historical arguments = %s, want %s", out, tc.want)
+					}
+					src := decodeObject(t, body)["input"].([]any)
+					if !reflect.DeepEqual(input[1:], src[3:]) {
+						t.Fatalf("tool results or hosted history changed: %s", out)
+					}
+				})
+			}
 		}
 	}
 }
@@ -195,5 +200,71 @@ func TestNativeRequestMuseSearchControls(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestNativeRequestHostedSearchPolicy(t *testing.T) {
+	for _, model := range []string{"muse-spark-1.3-contributor", "grok-4.7", "gpt-6.1-sol"} {
+		for _, disabled := range []bool{false, true} {
+			for _, additional := range []bool{false, true} {
+				t.Run(model+"/disabled="+strconv.FormatBool(disabled)+"/additional="+strconv.FormatBool(additional), func(t *testing.T) {
+					tools := []any{
+						map[string]any{"type": "web_search"},
+						map[string]any{"type": "web_search_preview"},
+						map[string]any{"type": "web_search_preview_2025_03_11"},
+						map[string]any{"type": "namespace", "name": "web", "tools": []any{
+							map[string]any{"type": "function", "name": "web_search", "parameters": map[string]any{"type": "object"}},
+						}},
+						map[string]any{"type": "file_search", "vector_store_ids": []any{"v"}},
+					}
+					src := map[string]any{"input": []any{}, "tools": tools, "tool_choice": "required"}
+					if additional {
+						src["tools"] = []any{}
+						src["input"] = []any{map[string]any{"type": "additional_tools", "tools": tools}}
+					}
+					out, eErr := BuildNativeRequest(model, encodeValue(t, src))
+					if eErr == nil && disabled {
+						out, eErr = FilterHostedWebSearch(out)
+					}
+					if eErr != nil {
+						t.Fatal(eErr)
+					}
+					got := decodeObject(t, out)
+					gotTools := got["tools"].([]any)
+					want := 5
+					if disabled {
+						want = 2
+					}
+					if len(gotTools) != want || got["tool_choice"] != "required" ||
+						gotTools[0].(map[string]any)["type"] != "function" ||
+						gotTools[0].(map[string]any)["name"] != "web_search" {
+						t.Fatalf("hosted-search policy changed client tools: %s", out)
+					}
+					for _, raw := range gotTools[1:] {
+						tool := raw.(map[string]any)
+						if want == 2 && strings.HasPrefix(tool["type"].(string), "web_search") {
+							t.Fatalf("disabled hosted search survived: %s", out)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestNativeRequestDisabledSearchChoices(t *testing.T) {
+	for _, choice := range []any{
+		map[string]any{"type": "web_search"},
+		map[string]any{"type": "web_search_preview_2025_03_11"},
+		"required",
+	} {
+		body := encodeValue(t, map[string]any{"input": "hi", "tools": []any{map[string]any{"type": "web_search"}}, "tool_choice": choice})
+		if _, eErr := FilterHostedWebSearch(body); eErr == nil || eErr.Class != errclass.ClassUnsupported {
+			t.Fatalf("forced disabled search accepted: %s (%v)", body, eErr)
+		}
+	}
+	out, eErr := FilterHostedWebSearch([]byte(`{"input":"hi","tools":[{"type":"web_search"}],"tool_choice":"auto"}`))
+	if eErr != nil || len(decodeObject(t, out)["tools"].([]any)) != 0 {
+		t.Fatalf("empty automatic tool set = %s (%v)", out, eErr)
 	}
 }

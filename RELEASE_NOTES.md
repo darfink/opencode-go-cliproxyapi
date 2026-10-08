@@ -1,3 +1,17 @@
+## Local Model Enrichment
+
+- Use a 1,048,576-token fallback for `muse-spark-1.3-contributor` when its catalog omits the context limit.
+- Preserve explicit provider limits and dynamic model discovery.
+- Consolidate reasoning efforts, context fallbacks, and hosted-search policy into one model-enrichment table.
+- Add `model-enrichments` configuration overrides for `reasoning-efforts`, `context-window`, and `hosted-web-search`.
+- Resolve enrichment once per catalog snapshot. Explicit configuration overrides provider metadata; built-ins fill missing metadata on audited endpoints.
+- Replace the local `disable-muse-hosted-search` switch with a per-model `hosted-web-search: disabled` policy.
+- Apply hosted-search filtering to all Responses models, not just Muse. Preserve client-executed search functions and other models.
+- Reject requests that force a disabled hosted search tool.
+- Preserve original usage counters in streaming and non-streaming responses.
+
+These changes are maintained on the fork's `el/local-opencode-go-setup` branch. They are not part of the v8 integration PR.
+
 ## Local Responses Compatibility
 
 - Reuse the CLIProxyAPI SDK tool index for Codex Responses requests on Chat Completions and Messages routes.
@@ -8,7 +22,7 @@
 - Return bounded, redacted provider errors when streaming requests fail before the first response byte.
 - Close stalled error reads when the request times out.
 
-These fixes remain local and separate from the reasoning metadata and v8 integration commits.
+These fixes remain on the local-setup branch, separate from the reasoning metadata and v8 integration commits.
 
 ## Local Reasoning Metadata
 

@@ -99,7 +99,7 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_opencode_session=%s fallback=%t", "non-stream", req.SourceFormat, sessionID, sessionID == emptyOpenCodeSessionID)
-	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking, &res.tools)
+	upstreamBody, eErr := buildUpstreamRequest(res.rec, req.SourceFormat, req.OriginalRequest, &res.tools)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
@@ -140,22 +140,35 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: converted, Headers: resp.Headers}), nil
 }
 
-func buildUpstreamRequest(route catalog.Route, upstreamModel, sourceFormat string, sourceBody []byte, ts *pluginapi.ThinkingSupport, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func buildUpstreamRequest(rec catalog.ModelRecord, sourceFormat string, sourceBody []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+	route, upstreamModel, ts := rec.Protocol, rec.UpstreamID, rec.Thinking
+	var body []byte
+	var eErr *errclass.Error
 	if usesResponsesCompat(route, sourceFormat, upstreamModel) {
 		if route == catalog.RouteResponses {
-			return responsescompat.BuildNativeRequest(upstreamModel, sourceBody)
+			body, eErr = responsescompat.BuildNativeRequest(upstreamModel, sourceBody)
+		} else {
+			body, eErr = responsescompat.BuildRequest(route, upstreamModel, sourceBody, ts)
 		}
-		return responsescompat.BuildRequest(route, upstreamModel, sourceBody, ts)
+	} else {
+		switch route {
+		case catalog.RouteChatCompletions:
+			body, eErr = chatcompletions.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts, tools...)
+		case catalog.RouteMessages:
+			body, eErr = messages.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts, tools...)
+		case catalog.RouteResponses:
+			body, eErr = responses.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts, tools...)
+		default:
+			return nil, errclass.Translation("unsupported route")
+		}
 	}
-	switch route {
-	case catalog.RouteChatCompletions:
-		return chatcompletions.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts, tools...)
-	case catalog.RouteMessages:
-		return messages.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts, tools...)
-	case catalog.RouteResponses:
-		return responses.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts, tools...)
+	if eErr != nil {
+		return nil, eErr
 	}
-	return nil, errclass.Translation("unsupported route")
+	if route == catalog.RouteResponses && rec.HostedWebSearch == config.HostedWebSearchDisabled {
+		return responsescompat.FilterHostedWebSearch(body)
+	}
+	return body, nil
 }
 
 func usesResponsesCompat(route catalog.Route, sourceFormat, model string) bool {
@@ -398,7 +411,7 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_opencode_session=%s fallback=%t", "stream", req.SourceFormat, sessionID, sessionID == emptyOpenCodeSessionID)
-	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking, &res.tools)
+	upstreamBody, eErr := buildUpstreamRequest(res.rec, req.SourceFormat, req.OriginalRequest, &res.tools)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}

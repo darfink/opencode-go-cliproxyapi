@@ -430,7 +430,7 @@ func TestRegisterSuccessPublishesModels(t *testing.T) {
 		t.Fatalf("schema_version = %d, want %d", reg.SchemaVersion, pluginabi.SchemaVersion)
 	}
 	if reg.Metadata.Name != "opencode-go-cliproxyapi" || reg.Metadata.Version != pluginVersion ||
-		len(reg.Metadata.ConfigFields) != 10 {
+		len(reg.Metadata.ConfigFields) != 11 {
 		t.Fatalf("metadata wrong: %+v", reg.Metadata)
 	}
 	if !reg.Capabilities.ModelProvider || !reg.Capabilities.AuthProvider {
@@ -504,6 +504,7 @@ func TestRegistrationConfigFields(t *testing.T) {
 		{"request-timeout", pluginapi.ConfigFieldTypeString},
 		{"max-response-bytes", pluginapi.ConfigFieldTypeInteger},
 		{"allow-http", pluginapi.ConfigFieldTypeBoolean},
+		{"model-enrichments", pluginapi.ConfigFieldTypeObject},
 	}
 
 	if len(reg.Metadata.ConfigFields) != len(expectedFields) {

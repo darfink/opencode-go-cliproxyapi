@@ -124,6 +124,34 @@ max-response-bytes: 1024
 	}
 }
 
+func TestLoadModelEnrichments(t *testing.T) {
+	for _, tc := range []struct {
+		name, yaml string
+		want       HostedWebSearchPolicy
+	}{
+		{"default", "", ""},
+		{"enabled", "model-enrichments:\n  grok-4.7:\n    hosted-web-search: enabled\n", HostedWebSearchEnabled},
+		{"disabled", "model-enrichments:\n  grok-4.7:\n    hosted-web-search: disabled\n", HostedWebSearchDisabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load([]byte(tc.yaml + withKey))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := cfg.ModelEnrichments["grok-4.7"].HostedWebSearch
+			if tc.want == "" {
+				if got != nil {
+					t.Fatal("default policy must inherit")
+				}
+				return
+			}
+			if got == nil || *got != tc.want {
+				t.Fatalf("hosted search policy = %v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadEnvExpansion(t *testing.T) {
 	t.Setenv("TEST_OG_KEY", "expanded-secret")
 	c, err := Load([]byte("api-keys:\n  - value: ${TEST_OG_KEY}\n"))

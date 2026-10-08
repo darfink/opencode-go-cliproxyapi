@@ -107,6 +107,7 @@ plugins:
       request-timeout: "5m"              # upstream request timeout (default: "5m")
       max-response-bytes: 67108864       # max non-streaming response body size in bytes (default: 64 MiB)
       allow-http: false                  # allow http:// scheme for local mock/testing (default: false)
+      model-enrichments: {}              # optional overrides keyed by exact model ID
 ```
 
 ### Configuration Options
@@ -127,6 +128,53 @@ plugins:
 | `request-timeout` | `duration` | `5m` | Upstream HTTP request timeout. Must be positive. |
 | `max-response-bytes` | `int64` | `67108864` (64 MiB) | Maximum non-streaming response body size in bytes. |
 | `allow-http` | `bool` | `false` | When `true`, permits `http://` scheme in `base-url` / `catalog-url` for local testing. |
+| `model-enrichments` | `object` | `{}` | Per-model overrides for reasoning efforts, context limits, and hosted-search policy. Use exact model IDs without the client-facing prefix. |
+
+### Model Enrichment
+
+Models remain dynamically discovered. Built-in enrichment supplies missing metadata for exact, audited model/route combinations.
+Configured enrichment overrides only the fields you specify. Provider metadata takes precedence over built-in metadata.
+Enrichment does not add models that the catalog did not return.
+
+```yaml
+plugins:
+  configs:
+    opencode-go-cliproxyapi:
+      model-enrichments:
+        muse-spark-1.3-contributor:
+          context-window: 1048576
+          hosted-web-search: disabled
+          # Optional; omitted fields inherit their existing values.
+          # reasoning-efforts: [minimal, low, medium, high, xhigh, max]
+```
+
+| Field | Values | Behavior |
+|-------|--------|----------|
+| `reasoning-efforts` | Nonempty list of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, or `auto` | Replaces advertised efforts. Retains provider budget limits. Does not guarantee that the provider accepts the configured efforts. |
+| `context-window` | Positive integer | Replaces the context limit published to clients. Does not change the provider's actual limit. |
+| `hosted-web-search` | `enabled` or `disabled` | `enabled` preserves requested hosted search on Responses routes. `disabled` removes hosted-search declarations, including follow-up declarations. Does not add tools or enable search on Chat/Messages routes. |
+
+The default hosted-search policy is `enabled`. Client-executed function tools, historical search results, and usage counters remain unchanged.
+The `auto` effort requires at least one named effort because budget conversion needs a named effort ladder.
+Requests that force a disabled hosted-search tool return an error before execution.
+The executor enforces this policy; Codex's `supports_search_tool` catalog flag controls tool discovery, not hosted web search.
+
+### Muse Spark and Codex
+
+When the catalog omits its context limit, `muse-spark-1.3-contributor` uses a 1,048,576-token fallback.
+Explicit provider limits take precedence. Model discovery remains dynamic.
+See [Meta's model limits](https://dev.meta.ai/docs/models).
+
+Muse's hosted search adds input usage across internal model calls.
+Codex treats that usage as context size, which can cause repeated compaction.
+See [Meta's token-counting guidance](https://dev.meta.ai/docs/token-counting).
+
+For this Codex compatibility issue, configure `hosted-web-search: disabled` for `muse-spark-1.3-contributor`, as shown above.
+This removes native `web_search` and `web_search_preview` declarations for this model only.
+Client-executed search functions remain available if the client provides them.
+Requests that force a disabled search tool return an error.
+Historical search results and original usage counters remain unchanged.
+Hosted search remains enabled by default.
 
 ## Testing
 

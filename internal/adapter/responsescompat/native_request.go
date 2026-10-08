@@ -67,7 +67,7 @@ func BuildNativeRequest(model string, body []byte) ([]byte, *errclass.Error) {
 				// Native Responses endpoints can execute hosted tools. Leave
 				// those definitions intact instead of applying the Chat policy.
 				if strings.HasPrefix(strings.ToLower(model), "muse-spark") &&
-					(def.Type == "web_search" || strings.HasPrefix(def.Type, "web_search_preview")) {
+					isWebSearchTool(def.Type) {
 					var search map[string]json.RawMessage
 					_ = json.Unmarshal(tool, &search)
 					// Muse rejects Codex's text/image selector even on preview

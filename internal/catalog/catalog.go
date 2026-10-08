@@ -61,16 +61,17 @@ func routeFromString(s string) (Route, bool) {
 
 // ModelRecord is one routable normalized catalog entry (arch §7, FR-003).
 type ModelRecord struct {
-	PublicID     string
-	UpstreamID   string
-	DisplayName  string
-	Protocol     Route
-	EndpointPath string
-	ContextLimit int64
-	OutputLimit  int64
-	InputModes   []string
-	OutputModes  []string
-	Thinking     *pluginapi.ThinkingSupport
+	PublicID        string
+	UpstreamID      string
+	DisplayName     string
+	Protocol        Route
+	EndpointPath    string
+	ContextLimit    int64
+	OutputLimit     int64
+	InputModes      []string
+	OutputModes     []string
+	Thinking        *pluginapi.ThinkingSupport
+	HostedWebSearch config.HostedWebSearchPolicy
 }
 
 // UnsupportedModel is a discovered model excluded from the routable set,
@@ -309,12 +310,11 @@ func (m *Manager) swap(entries []rawModel, extraWarns ...string) {
 			DisplayName:  display,
 			Protocol:     route,
 			EndpointPath: endpoint,
-			ContextLimit: e.ContextLength,
 			OutputLimit:  e.MaxOutputTokens,
 			InputModes:   inputModes,
 			OutputModes:  outputModes,
-			Thinking:     modelThinking(e, route, endpoint),
 		}
+		m.enrichModel(e, &rec)
 		// With a prefix enabled, one record's PublicID can equal another
 		// record's UpstreamID (upstream "foo" and "opencode-go/foo" both
 		// claim index key "<prefix>/foo"); last-write-wins would silently

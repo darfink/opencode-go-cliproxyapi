@@ -1458,7 +1458,7 @@ func TestConvertNonStreamSeamBranches(t *testing.T) {
 		eErr.Class != errclass.ClassTranslation {
 		t.Fatalf("unknown route = %v", eErr)
 	}
-	if _, eErr := buildUpstreamRequest(catalog.Route("weird"), "m", "openai", nil, nil); eErr == nil ||
+	if _, eErr := buildUpstreamRequest(catalog.ModelRecord{Protocol: catalog.Route("weird"), UpstreamID: "m"}, "openai", nil); eErr == nil ||
 		eErr.Class != errclass.ClassTranslation {
 		t.Fatalf("unknown route build = %v", eErr)
 	}

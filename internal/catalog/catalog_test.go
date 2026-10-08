@@ -148,6 +148,30 @@ func TestRefreshSuccess(t *testing.T) {
 	}
 }
 
+func TestMuseContextLimitFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       int64
+	}{
+		{"missing", `{"id":"muse-spark-1.3-contributor"}`, 1_048_576},
+		{"explicit zero", `{"id":"muse-spark-1.3-contributor","context_length":0}`, 1_048_576},
+		{"provider limit wins", `{"id":"muse-spark-1.3-contributor","context_length":131072}`, 131_072},
+		{"unknown variant", `{"id":"muse-spark-future"}`, 0},
+		{"other provider", `{"id":"grok-4.7"}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200,
+				Body: []byte(`{"data":[` + tc.body + `]}`)}}
+			mgr := newManager(testCfg(), fc)
+			mustRefresh(t, mgr)
+			models := mgr.Models()
+			if len(models) != 1 || models[0].ContextLimit != tc.want {
+				t.Fatalf("context metadata = %+v, want %d", models, tc.want)
+			}
+		})
+	}
+}
+
 func TestRoutePriorityMatrix(t *testing.T) {
 	cfg := testCfg()
 	cfg.RouteOverrides = map[string]config.RouteOverride{

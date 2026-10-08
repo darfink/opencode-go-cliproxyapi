@@ -11,7 +11,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-func TestModelsPublishAllVerifiedEfforts(t *testing.T) {
+func TestModelsPublishAllEnrichedEfforts(t *testing.T) {
 	want := map[string]string{
 		"muse-spark-1.3-contributor": "minimal,low,medium,high,xhigh,max",
 		"grok-4.7":                   "minimal,low,medium,high,xhigh",
@@ -149,7 +149,7 @@ func TestExecuteForwardsNewlyAdvertisedEfforts(t *testing.T) {
 	}
 }
 
-func TestExecuteForwardsVerifiedMessagesEfforts(t *testing.T) {
+func TestExecuteForwardsEnrichedMessagesEfforts(t *testing.T) {
 	for _, id := range []string{"minimax-m2.5", "minimax-m3", "qwen3.6-plus", "qwen3.7-max", "qwen3.8-flash", "qwen3.8-max"} {
 		for _, tc := range []struct {
 			effort string

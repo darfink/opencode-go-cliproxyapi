@@ -240,6 +240,11 @@ func pluginConfigFields() []pluginapi.ConfigField {
 			Type:        pluginapi.ConfigFieldTypeBoolean,
 			Description: "Allow plain http:// URLs for local testing/mocking (default: false).",
 		},
+		{
+			Name:        "model-enrichments",
+			Type:        pluginapi.ConfigFieldTypeObject,
+			Description: "Per-model enrichment overrides (`reasoning-efforts`, `context-window`, `hosted-web-search: enabled|disabled`). Use exact model IDs without the client prefix.",
+		},
 	}
 }
 

@@ -7,10 +7,13 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"opencode-go-cliproxyapi/internal/thinking"
 )
 
 // Defaults (spec 04 §2/§4).
@@ -48,6 +51,23 @@ type RouteOverride struct {
 	Endpoint string `yaml:"endpoint"`
 }
 
+// HostedWebSearchPolicy permits or removes requested hosted tools. It never
+// adds a search tool or enables search on a protocol that cannot execute it.
+type HostedWebSearchPolicy string
+
+const (
+	HostedWebSearchEnabled  HostedWebSearchPolicy = "enabled"
+	HostedWebSearchDisabled HostedWebSearchPolicy = "disabled"
+)
+
+// ModelEnrichment overrides only the fields supplied for an exact model ID.
+// Nil fields inherit provider metadata or the plugin's built-in enrichment.
+type ModelEnrichment struct {
+	ReasoningEfforts []string               `yaml:"reasoning-efforts"`
+	ContextWindow    *int64                 `yaml:"context-window"`
+	HostedWebSearch  *HostedWebSearchPolicy `yaml:"hosted-web-search"`
+}
+
 type Config struct {
 	BaseURL          string
 	CatalogURL       string
@@ -59,22 +79,24 @@ type Config struct {
 	AllowHTTP        bool
 	RequestTimeout   time.Duration
 	MaxResponseBytes int64
+	ModelEnrichments map[string]ModelEnrichment
 }
 
 // rawConfig mirrors the YAML shape; pointer fields distinguish "unset"
 // (apply default) from explicitly-set values including "" (validate as-is).
 // Unknown fields are ignored (host may pass extra keys).
 type rawConfig struct {
-	BaseURL          *string                  `yaml:"base-url"`
-	CatalogURL       *string                  `yaml:"catalog-url"`
-	ModelPrefix      rawPrefix                `yaml:"model-prefix"`
-	APIKeys          []rawKey                 `yaml:"api-keys"`
-	Catalog          rawCatalog               `yaml:"catalog"`
-	Protocols        rawProtocols             `yaml:"protocols"`
-	RouteOverrides   map[string]RouteOverride `yaml:"route-overrides"`
-	AllowHTTP        bool                     `yaml:"allow-http"`
-	RequestTimeout   *string                  `yaml:"request-timeout"`
-	MaxResponseBytes *int64                   `yaml:"max-response-bytes"`
+	BaseURL          *string                    `yaml:"base-url"`
+	CatalogURL       *string                    `yaml:"catalog-url"`
+	ModelPrefix      rawPrefix                  `yaml:"model-prefix"`
+	APIKeys          []rawKey                   `yaml:"api-keys"`
+	Catalog          rawCatalog                 `yaml:"catalog"`
+	Protocols        rawProtocols               `yaml:"protocols"`
+	RouteOverrides   map[string]RouteOverride   `yaml:"route-overrides"`
+	AllowHTTP        bool                       `yaml:"allow-http"`
+	RequestTimeout   *string                    `yaml:"request-timeout"`
+	MaxResponseBytes *int64                     `yaml:"max-response-bytes"`
+	ModelEnrichments map[string]ModelEnrichment `yaml:"model-enrichments"`
 }
 
 type rawPrefix struct {
@@ -149,6 +171,7 @@ func Load(yamlBytes []byte) (Config, error) {
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
+		ModelEnrichments: raw.ModelEnrichments,
 	}
 	if raw.CatalogURL != nil {
 		// Mirror the derived-default trim so an explicit trailing-slash
@@ -208,6 +231,39 @@ func (c Config) validate() error {
 		}
 		if !strings.HasPrefix(o.Endpoint, "/") {
 			return fmt.Errorf("route-overrides[%s].endpoint: must start with /", name)
+		}
+	}
+	for name, enrichment := range c.ModelEnrichments {
+		if name == "" || strings.TrimSpace(name) != name {
+			return fmt.Errorf("model-enrichments: model IDs must be nonempty without surrounding whitespace")
+		}
+		if enrichment.ContextWindow != nil && *enrichment.ContextWindow <= 0 {
+			return fmt.Errorf("model-enrichments[%s].context-window: must be positive", name)
+		}
+		if enrichment.HostedWebSearch != nil && *enrichment.HostedWebSearch != HostedWebSearchEnabled && *enrichment.HostedWebSearch != HostedWebSearchDisabled {
+			return fmt.Errorf("model-enrichments[%s].hosted-web-search: must be enabled or disabled", name)
+		}
+		if enrichment.ReasoningEfforts != nil {
+			if len(enrichment.ReasoningEfforts) == 0 {
+				return fmt.Errorf("model-enrichments[%s].reasoning-efforts: must not be empty", name)
+			}
+			seenEfforts := make(map[string]bool)
+			hasNamedEffort := false
+			for _, effort := range enrichment.ReasoningEfforts {
+				named := slices.Contains(thinking.CanonicalLevels, effort)
+				if !named && effort != "auto" {
+					return fmt.Errorf("model-enrichments[%s].reasoning-efforts: unsupported effort", name)
+				}
+				if seenEfforts[effort] {
+					return fmt.Errorf("model-enrichments[%s].reasoning-efforts: duplicate effort", name)
+				}
+				seenEfforts[effort] = true
+				hasNamedEffort = hasNamedEffort || named
+			}
+			// Budget conversion needs a named ladder; auto is only a sentinel.
+			if !hasNamedEffort {
+				return fmt.Errorf("model-enrichments[%s].reasoning-efforts: auto requires at least one named effort", name)
+			}
 		}
 	}
 	if c.ModelPrefix.Enabled && !validPrefix(c.ModelPrefix.Value) {
