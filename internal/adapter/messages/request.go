@@ -314,7 +314,15 @@ func finalize(req *messagesRequest, system []string, effort string, ts *pluginap
 		req.Messages = []anthropicMessage{}
 	}
 	if effort != "" {
-		budget, _ := thinking.BudgetFromEffort(effort, ts)
+		if eErr := thinking.ValidateEffort(effort, ts); eErr != nil {
+			return nil, eErr
+		}
+		// Messages needs a token budget; unknown efforts must not disable thinking.
+		budget, ok := thinking.BudgetFromEffort(effort, ts)
+		if !ok {
+			return nil, &errclass.Error{Class: errclass.ClassUnsupported,
+				Message: fmt.Sprintf("reasoning_effort %q has no supported Messages token budget", effort)}
+		}
 		applyThinking(req, budget)
 	}
 	b, _ := json.Marshal(req) // only marshallable composed types; cannot fail

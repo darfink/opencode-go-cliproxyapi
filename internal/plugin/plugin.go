@@ -19,6 +19,7 @@ import (
 	"opencode-go-cliproxyapi/internal/catalog"
 	"opencode-go-cliproxyapi/internal/config"
 	"opencode-go-cliproxyapi/internal/errclass"
+	"opencode-go-cliproxyapi/internal/thinking"
 )
 
 // ProviderID is the single provider key served by this plugin (FR-001).
@@ -425,7 +426,7 @@ func (m *Manager) handleModels() ([]byte, error) {
 				MaxCompletionTokens:       rec.OutputLimit,
 				SupportedInputModalities:  rec.InputModes,
 				SupportedOutputModalities: rec.OutputModes,
-				Thinking:                  rec.Thinking,
+				Thinking:                  thinking.EffectiveSupport(rec.Thinking),
 			})
 		}
 	}

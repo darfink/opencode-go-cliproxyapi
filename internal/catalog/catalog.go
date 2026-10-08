@@ -313,7 +313,7 @@ func (m *Manager) swap(entries []rawModel, extraWarns ...string) {
 			OutputLimit:  e.MaxOutputTokens,
 			InputModes:   inputModes,
 			OutputModes:  outputModes,
-			Thinking:     normalizeThinking(e.Thinking),
+			Thinking:     modelThinking(e, route, endpoint),
 		}
 		// With a prefix enabled, one record's PublicID can equal another
 		// record's UpstreamID (upstream "foo" and "opencode-go/foo" both

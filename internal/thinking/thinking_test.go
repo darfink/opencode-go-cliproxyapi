@@ -1,6 +1,7 @@
 package thinking
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -8,8 +9,34 @@ import (
 	"opencode-go-cliproxyapi/internal/errclass"
 )
 
+func TestEffectiveSupportMatchesValidation(t *testing.T) {
+	for _, ts := range []*pluginapi.ThinkingSupport{
+		nil,
+		{Min: 1024, Max: 32768, Levels: []string{" XHIGH ", "high", "high", "unknown"}, ZeroAllowed: true, DynamicAllowed: true},
+		{Levels: []string{"unknown"}},
+		{Levels: []string{"minimal", "high", "max", "ultra"}},
+	} {
+		published := EffectiveSupport(ts)
+		for _, level := range append(slices.Clone(CanonicalLevels), "auto") {
+			if advertised, accepted := slices.Contains(published.Levels, level), ValidateEffort(level, ts) == nil; advertised != accepted {
+				t.Fatalf("level %s advertised=%v accepted=%v for %+v", level, advertised, accepted, ts)
+			}
+		}
+		if ts != nil {
+			if published.Min != ts.Min || published.Max != ts.Max || published.ZeroAllowed != ts.ZeroAllowed || published.DynamicAllowed != ts.DynamicAllowed {
+				t.Fatalf("capability flags changed: %+v -> %+v", ts, published)
+			}
+			before := slices.Clone(ts.Levels)
+			published.Levels[0] = "changed"
+			if !slices.Equal(before, ts.Levels) {
+				t.Fatal("publishing mutated the shared catalog")
+			}
+		}
+	}
+}
+
 func TestCanonicalLevelsOrder(t *testing.T) {
-	want := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+	want := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 	if len(CanonicalLevels) != len(want) {
 		t.Fatalf("CanonicalLevels = %v", CanonicalLevels)
 	}
@@ -195,6 +222,8 @@ func TestBudgetFromEffort(t *testing.T) {
 			&pluginapi.ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh", "max"}}, 32768, true},
 		{"exact table value max", "max",
 			&pluginapi.ThinkingSupport{Levels: []string{"low", "max"}}, 128000, true},
+		{"named-only ultra has no invented budget", "ultra",
+			&pluginapi.ThinkingSupport{Levels: []string{"low", "ultra"}}, 0, false},
 		{"table value clamped down to max", "max",
 			&pluginapi.ThinkingSupport{Min: 1000, Max: 2000, Levels: []string{"low", "max"}}, 2000, true},
 		{"table value clamped up to min", "low",
@@ -254,7 +283,8 @@ func TestEffortNeverOutsideSupported(t *testing.T) {
 // level to its budget and back yields the same level whenever it is
 // supported. ZeroAllowed keeps "none"/"minimal" on their own table values;
 // "max" is excluded because the host never derives it from a budget (its
-// 128000 table value maps back through the thresholds to "xhigh").
+// 128000 table value maps back through the thresholds to "xhigh"). The named
+// ultra effort has no Messages budget conversion.
 func TestBudgetFromEffortRoundTrip(t *testing.T) {
 	ts := &pluginapi.ThinkingSupport{ZeroAllowed: true, Levels: CanonicalLevels}
 	for _, level := range []string{"none", "minimal", "low", "medium", "high", "xhigh"} {

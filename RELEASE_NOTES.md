@@ -1,3 +1,15 @@
+## Local Reasoning Metadata
+
+- Publish verified reasoning levels when OpenCode Go omits model metadata.
+- Include accepted `max`, `xhigh`, and `ultra` options for the audited models and routes.
+- Keep explicit model metadata authoritative. Other models retain the low, medium, and high fallback.
+- Keep model discovery dynamic. The verified table supplements capabilities, not the model list.
+- Forward named efforts on Chat Completions and native Responses routes.
+- Reject Messages efforts that have no supported token-budget conversion.
+- Keep Qwen 3.6 below `max` because that token-budget conversion fails.
+
+These changes remain on the local branch. They are not part of the v8 integration PR.
+
 ## CLIProxyAPI v8
 
 ### Features

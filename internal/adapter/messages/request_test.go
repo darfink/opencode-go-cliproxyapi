@@ -310,6 +310,20 @@ func TestChatCompletionsThinkingNoneAndAuto(t *testing.T) {
 	}
 }
 
+func TestNamedOnlyEffortDoesNotDisableMessagesThinking(t *testing.T) {
+	ts := &pluginapi.ThinkingSupport{Levels: []string{"high", "ultra"}}
+	for _, format := range []string{"openai", "openai-response"} {
+		body := []byte(`{"messages":[{"role":"user","content":"hi"}],"reasoning_effort":"ultra"}`)
+		if format == "openai-response" {
+			body = []byte(`{"input":"hi","reasoning":{"effort":"ultra"}}`)
+		}
+		out, eErr := BuildRequest("m", format, body, ts)
+		if len(out) != 0 || eErr == nil || eErr.Class != errclass.ClassUnsupported || !strings.Contains(eErr.Message, "no supported Messages token budget") {
+			t.Fatalf("%s silently dropped named effort: %s %v", format, out, eErr)
+		}
+	}
+}
+
 // F6 regression: with ZeroAllowed AND Min>0, effort "none" must stay at the
 // zero off-sentinel — the Min clamp must not silently re-enable thinking
 // (FR-005).
@@ -539,15 +553,13 @@ func TestChatCompletionsEmptyArgsToolImagesDefaultSchema(t *testing.T) {
 }
 
 func TestChatCompletionsUnknownEffort(t *testing.T) {
-	// Transparent router: unlisted efforts pass through without local
-	// validation; upstream is the sole authority. Unknown levels resolve
-	// to no thinking block rather than a descriptive rejection.
-	if _, eErr := chatReq(t, `{"messages":[{"role":"user","content":"a"}],"reasoning_effort":"maximum"}`); eErr != nil {
-		t.Fatalf("maximum: want nil (passthrough), got %+v", eErr)
-	}
-	// undeclared canonical levels pass through too (FR-005).
-	if _, eErr := chatReq(t, `{"messages":[{"role":"user","content":"a"}],"reasoning_effort":"max"}`); eErr != nil {
-		t.Fatalf("undeclared max: want nil (passthrough), got %+v", eErr)
+	// Messages cannot pass a named effort through. Reject unsupported mappings
+	// instead of sending a request that silently omits the requested thinking.
+	for _, effort := range []string{"maximum", "max"} {
+		_, eErr := chatReq(t, `{"messages":[{"role":"user","content":"a"}],"reasoning_effort":"`+effort+`"}`)
+		if eErr == nil || eErr.Class != errclass.ClassUnsupported {
+			t.Fatalf("%s: want explicit unsupported error, got %+v", effort, eErr)
+		}
 	}
 }
 
@@ -995,16 +1007,19 @@ func TestParallelFalseNoneStillUnsupported(t *testing.T) { // row 7
 	}
 }
 
-func TestFromResponses_ReasoningEffortPassthroughWithoutValidation(t *testing.T) {
+func TestFromResponses_ReasoningEffortRequiresDeclaredBudget(t *testing.T) {
 	body := `{"input":"hi","reasoning":{"effort":"xhigh"}}`
-	out, eErr := BuildRequest("claude-3-7-sonnet", "openai-response", []byte(body), nil)
-	if eErr != nil {
-		if eErr.Class == errclass.ClassUnsupported {
-			t.Fatalf("BuildRequest rejected xhigh with ClassUnsupported: %+v", eErr)
-		}
-		t.Fatalf("BuildRequest err = %+v, want nil (passthrough xhigh)", eErr)
+	if _, eErr := BuildRequest("claude-3-7-sonnet", "openai-response", []byte(body), nil); eErr == nil || eErr.Class != errclass.ClassUnsupported {
+		t.Fatalf("undeclared xhigh: want explicit unsupported error, got %+v", eErr)
 	}
-	_ = decodeReq(t, out)
+	ts := &pluginapi.ThinkingSupport{Levels: []string{"high", "xhigh"}}
+	out, eErr := BuildRequest("claude-3-7-sonnet", "openai-response", []byte(body), ts)
+	if eErr != nil {
+		t.Fatalf("declared xhigh: %v", eErr)
+	}
+	if got := decodeReq(t, out)["thinking"].(map[string]any)["budget_tokens"]; got != float64(32768) {
+		t.Fatalf("xhigh budget = %v, want 32768", got)
+	}
 }
 
 func TestFromResponses_CustomToolCallAndOutput(t *testing.T) {

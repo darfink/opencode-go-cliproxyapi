@@ -18,7 +18,7 @@ import (
 
 // CanonicalLevels is the ordered effort space, weakest to strongest.
 // "auto" is deliberately absent: it is a dynamic sentinel, not a rankable level.
-var CanonicalLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+var CanonicalLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 // levelBudgetTable ports the host's levelToBudgetMap verbatim
 // (SDK internal/thinking/convert.go @ v8.0.0): exact per-level budgets,
@@ -148,7 +148,12 @@ func BudgetFromEffort(effort string, ts *pluginapi.ThinkingSupport) (int64, bool
 			return 0, false
 		}
 	}
-	budget := levelBudgetTable[effort]
+	// Named-only efforts such as ultra have no verified Messages token budget.
+	// Do not turn a missing conversion into a zero budget that disables thinking.
+	budget, ok := levelBudgetTable[effort]
+	if !ok {
+		return 0, false
+	}
 	if ts != nil {
 		if ts.Min > 0 && budget < int64(ts.Min) {
 			budget = int64(ts.Min)
@@ -207,6 +212,25 @@ func SupportedLevels(ts *pluginapi.ThinkingSupport) []string {
 	}
 	if len(out) == 0 {
 		return defaultLevels()
+	}
+	return out
+}
+
+// EffectiveSupport publishes picker options from catalog capabilities. Named
+// routes can pass other efforts upstream, but must not advertise unverified ones.
+// A nil capability must not inherit unrelated template levels like xhigh.
+// Copy the catalog value because snapshots are shared with concurrent executors.
+func EffectiveSupport(ts *pluginapi.ThinkingSupport) *pluginapi.ThinkingSupport {
+	out := &pluginapi.ThinkingSupport{}
+	if ts != nil {
+		*out = *ts
+	}
+	out.Levels = SupportedLevels(ts)
+	if out.ZeroAllowed && !slices.Contains(out.Levels, "none") {
+		out.Levels = append([]string{"none"}, out.Levels...)
+	}
+	if out.DynamicAllowed {
+		out.Levels = append(out.Levels, "auto")
 	}
 	return out
 }
