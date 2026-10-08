@@ -71,6 +71,7 @@ type ModelRecord struct {
 	InputModes      []string
 	OutputModes     []string
 	Thinking        *pluginapi.ThinkingSupport
+	ReasoningPolicy ReasoningPolicy
 	HostedWebSearch config.HostedWebSearchPolicy
 }
 

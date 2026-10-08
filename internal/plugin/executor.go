@@ -142,8 +142,11 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 
 func buildUpstreamRequest(rec catalog.ModelRecord, sourceFormat string, sourceBody []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
 	route, upstreamModel, ts := rec.Protocol, rec.UpstreamID, rec.Thinking
+	sourceBody, toggle, eErr := prepareModelReasoning(rec.ReasoningPolicy, sourceFormat, sourceBody)
+	if eErr != nil {
+		return nil, eErr
+	}
 	var body []byte
-	var eErr *errclass.Error
 	if usesResponsesCompat(route, sourceFormat, upstreamModel) {
 		if route == catalog.RouteResponses {
 			body, eErr = responsescompat.BuildNativeRequest(upstreamModel, sourceBody)
@@ -162,6 +165,10 @@ func buildUpstreamRequest(rec catalog.ModelRecord, sourceFormat string, sourceBo
 			return nil, errclass.Translation("unsupported route")
 		}
 	}
+	if eErr != nil {
+		return nil, eErr
+	}
+	body, eErr = applyModelReasoning(rec.ReasoningPolicy, toggle, body)
 	if eErr != nil {
 		return nil, eErr
 	}

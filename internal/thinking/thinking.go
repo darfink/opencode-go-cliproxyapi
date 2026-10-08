@@ -238,3 +238,31 @@ func EffectiveSupport(ts *pluginapi.ThinkingSupport) *pluginapi.ThinkingSupport 
 func defaultLevels() []string {
 	return []string{"low", "medium", "high"}
 }
+
+// DistinctBudgetSupport hides efforts that clamp to the same Messages budget.
+// Keep the label whose native table budget is closest to the effective budget.
+// Request validation still uses the original capabilities for compatibility.
+func DistinctBudgetSupport(ts *pluginapi.ThinkingSupport) *pluginapi.ThinkingSupport {
+	out := *ts
+	out.Levels = nil
+	seen := make(map[int64]int)
+	for _, level := range ts.Levels {
+		budget, ok := BudgetFromEffort(level, ts)
+		if !ok || level == "auto" {
+			out.Levels = append(out.Levels, level)
+			continue
+		}
+		if i, exists := seen[budget]; exists {
+			distance := func(effort string) int64 {
+				return max(levelBudgetTable[effort]-budget, budget-levelBudgetTable[effort])
+			}
+			if distance(level) < distance(out.Levels[i]) {
+				out.Levels[i] = level
+			}
+			continue
+		}
+		seen[budget] = len(out.Levels)
+		out.Levels = append(out.Levels, level)
+	}
+	return &out
+}

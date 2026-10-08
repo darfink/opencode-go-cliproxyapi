@@ -35,6 +35,35 @@ func TestEffectiveSupportMatchesValidation(t *testing.T) {
 	}
 }
 
+func TestDistinctBudgetSupport(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		min, max     int
+		zero         bool
+		levels, want []string
+	}{
+		{"distinct", 0, 0, true, []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}, []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
+		{"clamped", 1024, 32768, true, []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}, []string{"none", "low", "medium", "high", "xhigh"}},
+		{"no off setting", 0, 0, false, []string{"minimal", "low", "high"}, []string{"minimal", "low", "high"}},
+		{"named and dynamic", 1024, 32768, true, []string{"minimal", "low", "xhigh", "max", "ultra", "auto"}, []string{"low", "xhigh", "ultra", "auto"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := &pluginapi.ThinkingSupport{Min: tc.min, Max: tc.max, ZeroAllowed: tc.zero, DynamicAllowed: true, Levels: slices.Clone(tc.levels)}
+			got := DistinctBudgetSupport(ts)
+			if !slices.Equal(got.Levels, tc.want) || got.Min != ts.Min || got.Max != ts.Max || got.DynamicAllowed != ts.DynamicAllowed || got.ZeroAllowed != ts.ZeroAllowed {
+				t.Fatalf("support = %+v, want %v", got, tc.want)
+			}
+			if !slices.Equal(ts.Levels, tc.levels) {
+				t.Fatal("deduplication mutated request capabilities")
+			}
+			got.Levels[0] = "changed"
+			if !slices.Equal(ts.Levels, tc.levels) {
+				t.Fatal("published levels alias the shared snapshot")
+			}
+		})
+	}
+}
+
 func TestCanonicalLevelsOrder(t *testing.T) {
 	want := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 	if len(CanonicalLevels) != len(want) {

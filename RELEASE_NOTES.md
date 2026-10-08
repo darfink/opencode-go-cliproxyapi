@@ -26,11 +26,13 @@ These fixes remain on the local-setup branch, separate from the reasoning metada
 
 ## Local Reasoning Metadata
 
-- Publish verified reasoning levels when OpenCode Go omits model metadata.
-- Include accepted `max`, `xhigh`, and `ultra` options for the audited models and routes.
-- Keep explicit model metadata authoritative. Other models retain the low, medium, and high fallback.
-- Keep model discovery dynamic. The verified table supplements capabilities, not the model list.
-- Forward named efforts on Chat Completions and native Responses routes.
+- Publish declared, distinct reasoning settings when OpenCode Go omits model metadata.
+- Remove equivalent and undeclared aliases from the picker. Keep named efforts compatible in direct Chat Completions and native Responses requests.
+- Use real thinking toggles for LongCat and MiniMax M3 without synthetic budgets or inflated output limits.
+- Publish a singleton default for fixed-mode models and omit their synthetic effort controls from outgoing requests.
+- Hide Messages efforts that resolve to the same clamped token budget. Retain distinct Qwen budgets.
+- Keep explicit model metadata and configured effort overrides authoritative. Unknown models expose one default instead of speculative tiers.
+- Keep model discovery dynamic. The enrichment table supplies capabilities, not the model list.
 - Reject Messages efforts that have no supported token-budget conversion.
 - Keep Qwen 3.6 below `max` because that token-budget conversion fails.
 

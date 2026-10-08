@@ -98,7 +98,7 @@ func TestExecuteRejectsUnsupportedMessagesEffortBeforeHTTP(t *testing.T) {
 	before := len(f.callsOf(pluginabi.MethodHostHTTPDo))
 	for _, tc := range []struct{ model, effort string }{
 		{"qwen3.6-plus", "max"}, {"qwen3.6-plus", "ultra"},
-		{"minimax-m3", "ultra"}, {"minimax-m3", "maximum"},
+		{"minimax-m3", "maximum"},
 	} {
 		for _, stream := range []bool{false, true} {
 			body := []byte(`{"input":"hi","reasoning":{"effort":"` + tc.effort + `"}}`)
@@ -118,10 +118,10 @@ func TestExecuteRejectsUnsupportedMessagesEffortBeforeHTTP(t *testing.T) {
 }
 
 func TestExecuteNamedEffortReachesUpstreamAndReturnsItsError(t *testing.T) {
-	const models = `{"data":[{"id":"glm-5.3"},{"id":"mimo-v2.6-pro"},{"id":"muse-spark-1.3-contributor"},{"id":"grok-4.7"}]}`
+	const models = `{"data":[{"id":"glm-5.3"},{"id":"muse-spark-1.3-contributor"},{"id":"grok-4.7"}]}`
 	const errorBody = `{"error":{"message":"upstream rejected reasoning effort"}}`
 	for _, tc := range []struct{ model, effort string }{
-		{"glm-5.3", "ultra"}, {"mimo-v2.6-pro", "max"},
+		{"glm-5.3", "ultra"},
 		{"muse-spark-1.3-contributor", "ultra"}, {"grok-4.7", "max"},
 	} {
 		for _, stream := range []bool{false, true} {

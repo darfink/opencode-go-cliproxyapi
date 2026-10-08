@@ -145,7 +145,7 @@ plugins:
           context-window: 1048576
           hosted-web-search: disabled
           # Optional; omitted fields inherit their existing values.
-          # reasoning-efforts: [minimal, low, medium, high, xhigh, max]
+          # reasoning-efforts: [minimal, low, medium, high, xhigh]
 ```
 
 | Field | Values | Behavior |
@@ -158,6 +158,22 @@ The default hosted-search policy is `enabled`. Client-executed function tools, h
 The `auto` effort requires at least one named effort because budget conversion needs a named effort ladder.
 Requests that force a disabled hosted-search tool return an error before execution.
 The executor enforces this policy; Codex's `supports_search_tool` catalog flag controls tool discovery, not hosted web search.
+
+### Distinct Reasoning Settings
+
+Built-in effort lists follow [OpenCode's declared controls](https://models.opencode.ai/api.json), not successful HTTP requests alone.
+For example, DeepSeek Pro exposes `high` and `max`. DeepSeek Flash exposes `low`, `high`, and `max`.
+Equivalent aliases, such as DeepSeek's `ultra`, remain valid in direct requests but do not appear in the picker.
+
+LongCat exposes `none` and `high` as a thinking toggle. MiniMax M3 maps these values to `disabled` and `adaptive`.
+These models do not use synthetic token budgets. Native MiniMax requests can still select `enabled` explicitly.
+
+Models without declared effort controls expose one `high` default because Codex requires a nonempty effort list.
+Known fixed-mode models omit effort controls from outgoing requests. A singleton does not represent an adjustable reasoning tier.
+Kimi K3 instead exposes its declared `max` setting.
+
+Qwen retains distinct token budgets. On Messages routes, efforts that resolve to the same clamped budget appear only once.
+Explicit provider metadata and configured `reasoning-efforts` replace the built-in reasoning policy.
 
 ### Muse Spark and Codex
 

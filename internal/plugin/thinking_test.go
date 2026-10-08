@@ -11,31 +11,31 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-func TestModelsPublishAllEnrichedEfforts(t *testing.T) {
+func TestModelsPublishDistinctEnrichedEfforts(t *testing.T) {
 	want := map[string]string{
-		"muse-spark-1.3-contributor": "minimal,low,medium,high,xhigh,max",
-		"grok-4.7":                   "minimal,low,medium,high,xhigh",
-		"deepseek-v4-pro":            "none,minimal,low,medium,high,xhigh,max,ultra",
-		"deepseek-v4.1-flash":        "none,minimal,low,medium,high,xhigh,max,ultra",
-		"glm-5.1":                    "low,medium,high,xhigh,max",
-		"glm-5.3":                    "low,medium,high,xhigh,max",
-		"glm-5.3-flash":              "none,minimal,low,medium,high,xhigh,max",
-		"hy3":                        "none,minimal,low,medium,high,xhigh,max",
-		"hy4-preview":                "none,minimal,low,medium,high,xhigh,max",
-		"kimi-k2.6":                  "none,minimal,low,medium,high,xhigh,max",
-		"kimi-k2.7-code":             "minimal,low,medium,high,xhigh,max,ultra",
-		"kimi-k3":                    "none,minimal,low,medium,high,xhigh,max",
-		"longcat-2.0":                "none,minimal,low,medium,high,xhigh,max,ultra",
-		"longcat-2.5-preview-free":   "none,minimal,low,medium,high,xhigh,max,ultra",
-		"mimo-v2.6-flash":            "none,low,medium,high",
-		"mimo-v2.6-pro":              "none,low,medium,high",
-		"minimax-m2.5":               "none,minimal,low,medium,high,xhigh,max",
-		"minimax-m3":                 "none,minimal,low,medium,high,xhigh,max",
+		"muse-spark-1.3-contributor": "minimal,low,medium,high,xhigh",
+		"grok-4.7":                   "low,medium,high,xhigh",
+		"deepseek-v4-pro":            "high,max",
+		"deepseek-v4.1-flash":        "low,high,max",
+		"glm-5.1":                    "high",
+		"glm-5.3":                    "low,high,max",
+		"glm-5.3-flash":              "low,high,max",
+		"hy3":                        "none,low,high",
+		"hy4-preview":                "none,high",
+		"kimi-k2.6":                  "high",
+		"kimi-k2.7-code":             "high",
+		"kimi-k3":                    "max",
+		"longcat-2.0":                "none,high",
+		"longcat-2.5-preview-free":   "none,high",
+		"mimo-v2.6-flash":            "high",
+		"mimo-v2.6-pro":              "high",
+		"minimax-m2.5":               "high",
+		"minimax-m3":                 "none,high",
 		"qwen3.6-plus":               "none,minimal,low,medium,high,xhigh",
 		"qwen3.7-max":                "none,minimal,low,medium,high,xhigh,max",
 		"qwen3.8-flash":              "none,minimal,low,medium,high,xhigh,max",
 		"qwen3.8-max":                "none,minimal,low,medium,high,xhigh,max",
-		"glm-future":                 "low,medium,high",
+		"glm-future":                 "high",
 	}
 	entries := make([]map[string]string, 0, len(want))
 	for id := range want {
@@ -78,7 +78,7 @@ func TestModelsPublishExplicitThinkingInsteadOfFallback(t *testing.T) {
 	}
 }
 
-func TestExecuteForwardsNewlyAdvertisedEfforts(t *testing.T) {
+func TestExecuteForwardsNamedEffortsIncludingHiddenAliases(t *testing.T) {
 	for _, tc := range []struct {
 		id     string
 		effort string
@@ -89,9 +89,8 @@ func TestExecuteForwardsNewlyAdvertisedEfforts(t *testing.T) {
 		{"glm-5.3", "max", false},
 		{"deepseek-v4-pro", "none", false},
 		{"deepseek-v4-pro", "ultra", false},
-		{"longcat-2.5-preview-free", "ultra", false},
-		{"mimo-v2.6-pro", "none", false},
-		{"kimi-k2.7-code", "minimal", false},
+		{"deepseek-v4.1-flash", "medium", false},
+		{"kimi-k3", "max", false},
 	} {
 		for _, stream := range []bool{false, true} {
 			t.Run(tc.id+"/"+tc.effort+map[bool]string{true: "/stream", false: "/non-stream"}[stream], func(t *testing.T) {
@@ -150,7 +149,7 @@ func TestExecuteForwardsNewlyAdvertisedEfforts(t *testing.T) {
 }
 
 func TestExecuteForwardsEnrichedMessagesEfforts(t *testing.T) {
-	for _, id := range []string{"minimax-m2.5", "minimax-m3", "qwen3.6-plus", "qwen3.7-max", "qwen3.8-flash", "qwen3.8-max"} {
+	for _, id := range []string{"qwen3.6-plus", "qwen3.7-max", "qwen3.8-flash", "qwen3.8-max"} {
 		for _, tc := range []struct {
 			effort string
 			budget int64

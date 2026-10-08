@@ -422,6 +422,15 @@ func (m *Manager) handleModels() ([]byte, error) {
 	models := make([]pluginapi.ModelInfo, 0)
 	if mgr != nil {
 		for _, rec := range mgr.Models() {
+			support := thinking.EffectiveSupport(rec.Thinking)
+			if rec.Thinking == nil {
+				// Unknown metadata cannot establish three distinct reasoning tiers.
+				// Keep one default because the Codex client catalog requires it.
+				support.Levels = []string{"high"}
+			}
+			if rec.Protocol == catalog.RouteMessages && rec.ReasoningPolicy == "" {
+				support = thinking.DistinctBudgetSupport(support)
+			}
 			models = append(models, pluginapi.ModelInfo{
 				ID:                        rec.PublicID,
 				Object:                    "model",
@@ -431,7 +440,7 @@ func (m *Manager) handleModels() ([]byte, error) {
 				MaxCompletionTokens:       rec.OutputLimit,
 				SupportedInputModalities:  rec.InputModes,
 				SupportedOutputModalities: rec.OutputModes,
-				Thinking:                  thinking.EffectiveSupport(rec.Thinking),
+				Thinking:                  support,
 			})
 		}
 	}

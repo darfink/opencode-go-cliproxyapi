@@ -17,24 +17,24 @@ func TestModelEnrichmentReasoningEfforts(t *testing.T) {
 		levels string
 		zero   bool
 	}{
-		{"muse-spark-1.3-contributor", "minimal,low,medium,high,xhigh,max", false},
-		{"grok-4.7", "minimal,low,medium,high,xhigh", false},
-		{"deepseek-v4-pro", "none,minimal,low,medium,high,xhigh,max,ultra", true},
-		{"deepseek-v4.1-flash", "none,minimal,low,medium,high,xhigh,max,ultra", true},
-		{"glm-5.1", "low,medium,high,xhigh,max", false},
-		{"glm-5.3", "low,medium,high,xhigh,max", false},
-		{"glm-5.3-flash", "none,minimal,low,medium,high,xhigh,max", true},
-		{"hy3", "none,minimal,low,medium,high,xhigh,max", true},
-		{"hy4-preview", "none,minimal,low,medium,high,xhigh,max", true},
-		{"kimi-k2.6", "none,minimal,low,medium,high,xhigh,max", true},
-		{"kimi-k2.7-code", "minimal,low,medium,high,xhigh,max,ultra", false},
-		{"kimi-k3", "none,minimal,low,medium,high,xhigh,max", true},
-		{"longcat-2.0", "none,minimal,low,medium,high,xhigh,max,ultra", true},
-		{"longcat-2.5-preview-free", "none,minimal,low,medium,high,xhigh,max,ultra", true},
-		{"mimo-v2.6-flash", "none,low,medium,high", true},
-		{"mimo-v2.6-pro", "none,low,medium,high", true},
-		{"minimax-m2.5", "none,minimal,low,medium,high,xhigh,max", true},
-		{"minimax-m3", "none,minimal,low,medium,high,xhigh,max", true},
+		{"muse-spark-1.3-contributor", "minimal,low,medium,high,xhigh", false},
+		{"grok-4.7", "low,medium,high,xhigh", false},
+		{"deepseek-v4-pro", "high,max", false},
+		{"deepseek-v4.1-flash", "low,high,max", false},
+		{"glm-5.1", "high", false},
+		{"glm-5.3", "low,high,max", false},
+		{"glm-5.3-flash", "low,high,max", false},
+		{"hy3", "none,low,high", true},
+		{"hy4-preview", "none,high", true},
+		{"kimi-k2.6", "high", false},
+		{"kimi-k2.7-code", "high", false},
+		{"kimi-k3", "max", false},
+		{"longcat-2.0", "none,high", true},
+		{"longcat-2.5-preview-free", "none,high", true},
+		{"mimo-v2.6-flash", "high", false},
+		{"mimo-v2.6-pro", "high", false},
+		{"minimax-m2.5", "high", false},
+		{"minimax-m3", "none,high", true},
 		{"qwen3.6-plus", "none,minimal,low,medium,high,xhigh", true},
 		{"qwen3.7-max", "none,minimal,low,medium,high,xhigh,max", true},
 		{"qwen3.8-flash", "none,minimal,low,medium,high,xhigh,max", true},
@@ -110,6 +110,36 @@ func TestUnknownVariantsKeepAbsentThinking(t *testing.T) {
 	}
 }
 
+func TestBuiltinReasoningPolicyPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, metadata       string
+		configured, override bool
+		want                 ReasoningPolicy
+	}{
+		{"builtin", "", false, false, ReasoningAdaptiveToggle},
+		{"provider", `,"thinking":{"levels":["low","high"]}`, false, false, ""},
+		{"partial provider", `,"thinking":{"min":1024}`, false, false, ""},
+		{"configured", "", true, false, ""},
+		{"other endpoint", "", false, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testCfg()
+			if tc.configured {
+				cfg.ModelEnrichments = map[string]config.ModelEnrichment{"minimax-m3": {ReasoningEfforts: []string{"low", "high"}}}
+			}
+			if tc.override {
+				cfg.RouteOverrides = map[string]config.RouteOverride{"minimax-m3": {Protocol: "messages", Endpoint: "/v1/custom"}}
+			}
+			m := newManager(cfg, &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200,
+				Body: []byte(`{"data":[{"id":"minimax-m3"` + tc.metadata + `}]}`)}})
+			mustRefresh(t, m)
+			if got := findModel(t, m.Models(), "minimax-m3").ReasoningPolicy; got != tc.want {
+				t.Fatalf("policy = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConfiguredEnrichmentOverridesProviderMetadata(t *testing.T) {
 	cfg, err := config.Load([]byte(`api-keys: [{value: test-key}]
 model-enrichments:
@@ -162,7 +192,7 @@ model-enrichments:
 	}
 	muse := findModel(t, m.Models(), "muse-spark-1.3-contributor")
 	if muse.ContextLimit != 1_048_576 || muse.HostedWebSearch != config.HostedWebSearchDisabled ||
-		strings.Join(muse.Thinking.Levels, ",") != "minimal,low,medium,high,xhigh,max" {
+		strings.Join(muse.Thinking.Levels, ",") != "minimal,low,medium,high,xhigh" {
 		t.Fatalf("partial enrichment lost built-in fields: %+v", muse)
 	}
 	future := findModel(t, m.Models(), "gpt-future")

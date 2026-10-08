@@ -8,13 +8,24 @@ import (
 	"opencode-go-cliproxyapi/internal/config"
 )
 
-// OpenCode Go currently omits thinking metadata from /models. These exact
-// model/route pairs accepted the listed efforts in live probes on 2026-10-07.
-// Acceptance does not imply that every effort produces distinct compute.
+// ReasoningPolicy distinguishes real provider controls from accepted no-op efforts.
+// The empty policy preserves named efforts and budget-based translation.
+type ReasoningPolicy string
+
+const (
+	ReasoningFixed          ReasoningPolicy = "fixed"
+	ReasoningToggle         ReasoningPolicy = "toggle"
+	ReasoningAdaptiveToggle ReasoningPolicy = "adaptive-toggle"
+)
+
+// OpenCode Go omits thinking metadata from /models. Named efforts and toggles
+// follow https://models.opencode.ai/api.json (2026-10-08), not HTTP acceptance.
+// Messages budget tiers retain the route-specific successful budget conversions.
 // Keep versioned IDs: a new variant or a different endpoint needs its own audit.
 type modelEnrichment struct {
 	route            Route
 	reasoningEfforts []string
+	reasoningPolicy  ReasoningPolicy
 	contextWindow    int64
 	hostedWebSearch  config.HostedWebSearchPolicy
 }
@@ -24,28 +35,31 @@ type modelEnrichment struct {
 var modelEnrichments = map[string]modelEnrichment{
 	"muse-spark-1.3-contributor": {
 		route:            RouteResponses,
-		reasoningEfforts: []string{"minimal", "low", "medium", "high", "xhigh", "max"},
+		reasoningEfforts: []string{"minimal", "low", "medium", "high", "xhigh"},
 		// https://dev.meta.ai/docs/models lists a 1M window for this exact model.
 		contextWindow:   1_048_576,
 		hostedWebSearch: config.HostedWebSearchEnabled,
 	},
-	"grok-4.7":                 {route: RouteResponses, reasoningEfforts: []string{"minimal", "low", "medium", "high", "xhigh"}},
-	"deepseek-v4-pro":          {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}},
-	"deepseek-v4.1-flash":      {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}},
-	"glm-5.1":                  {route: RouteChatCompletions, reasoningEfforts: []string{"low", "medium", "high", "xhigh", "max"}},
-	"glm-5.3":                  {route: RouteChatCompletions, reasoningEfforts: []string{"low", "medium", "high", "xhigh", "max"}},
-	"glm-5.3-flash":            {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
-	"hy3":                      {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
-	"hy4-preview":              {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
-	"kimi-k2.6":                {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
-	"kimi-k2.7-code":           {route: RouteChatCompletions, reasoningEfforts: []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}},
-	"kimi-k3":                  {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
-	"longcat-2.0":              {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}},
-	"longcat-2.5-preview-free": {route: RouteChatCompletions, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}},
-	"mimo-v2.6-flash":          {route: RouteChatCompletions, reasoningEfforts: []string{"none", "low", "medium", "high"}},
-	"mimo-v2.6-pro":            {route: RouteChatCompletions, reasoningEfforts: []string{"none", "low", "medium", "high"}},
-	"minimax-m2.5":             {route: RouteMessages, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
-	"minimax-m3":               {route: RouteMessages, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
+	"grok-4.7":            {route: RouteResponses, reasoningEfforts: []string{"low", "medium", "high", "xhigh"}},
+	"deepseek-v4-pro":     {route: RouteChatCompletions, reasoningEfforts: []string{"high", "max"}},
+	"deepseek-v4.1-flash": {route: RouteChatCompletions, reasoningEfforts: []string{"low", "high", "max"}},
+	// This retired model has no current declaration. Do not invent extra tiers.
+	"glm-5.1":       {route: RouteChatCompletions, reasoningEfforts: []string{"high"}},
+	"glm-5.3":       {route: RouteChatCompletions, reasoningEfforts: []string{"low", "high", "max"}},
+	"glm-5.3-flash": {route: RouteChatCompletions, reasoningEfforts: []string{"low", "high", "max"}},
+	"hy3":           {route: RouteChatCompletions, reasoningEfforts: []string{"none", "low", "high"}},
+	"hy4-preview":   {route: RouteChatCompletions, reasoningEfforts: []string{"none", "high"}},
+	// Codex catalogs need a nonempty effort list. A singleton is a fixed default,
+	// not an adjustable tier; requests omit reasoning controls for these models.
+	"kimi-k2.6":                {route: RouteChatCompletions, reasoningEfforts: []string{"high"}, reasoningPolicy: ReasoningFixed},
+	"kimi-k2.7-code":           {route: RouteChatCompletions, reasoningEfforts: []string{"high"}, reasoningPolicy: ReasoningFixed},
+	"kimi-k3":                  {route: RouteChatCompletions, reasoningEfforts: []string{"max"}},
+	"longcat-2.0":              {route: RouteChatCompletions, reasoningEfforts: []string{"none", "high"}, reasoningPolicy: ReasoningToggle},
+	"longcat-2.5-preview-free": {route: RouteChatCompletions, reasoningEfforts: []string{"none", "high"}, reasoningPolicy: ReasoningToggle},
+	"mimo-v2.6-flash":          {route: RouteChatCompletions, reasoningEfforts: []string{"high"}, reasoningPolicy: ReasoningFixed},
+	"mimo-v2.6-pro":            {route: RouteChatCompletions, reasoningEfforts: []string{"high"}, reasoningPolicy: ReasoningFixed},
+	"minimax-m2.5":             {route: RouteMessages, reasoningEfforts: []string{"high"}, reasoningPolicy: ReasoningFixed},
+	"minimax-m3":               {route: RouteMessages, reasoningEfforts: []string{"none", "high"}, reasoningPolicy: ReasoningAdaptiveToggle},
 	// The 128000-token max conversion requires max_tokens=129024, which this
 	// endpoint rejects. Smaller reasoning budgets, including xhigh, succeed.
 	"qwen3.6-plus":  {route: RouteMessages, reasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh"}},
@@ -64,6 +78,10 @@ func (m *Manager) enrichModel(e rawModel, rec *ModelRecord) {
 	rec.HostedWebSearch = config.HostedWebSearchEnabled
 	if enrichment, ok := modelEnrichments[e.ID]; ok && rec.Protocol == enrichment.route && rec.EndpointPath == enrichment.route.EndpointPath() {
 		if e.Thinking == nil && len(enrichment.reasoningEfforts) > 0 {
+			// An explicit effort declaration also replaces the built-in wire policy.
+			if m.cfg.ModelEnrichments[e.ID].ReasoningEfforts == nil {
+				rec.ReasoningPolicy = enrichment.reasoningPolicy
+			}
 			rec.Thinking = &pluginapi.ThinkingSupport{
 				Levels:      slices.Clone(enrichment.reasoningEfforts),
 				ZeroAllowed: slices.Contains(enrichment.reasoningEfforts, "none"),
