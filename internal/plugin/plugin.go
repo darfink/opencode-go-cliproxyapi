@@ -243,7 +243,7 @@ func pluginConfigFields() []pluginapi.ConfigField {
 		{
 			Name:        "model-enrichments",
 			Type:        pluginapi.ConfigFieldTypeObject,
-			Description: "Per-model enrichment overrides (`reasoning-efforts`, `context-window`, `hosted-web-search: enabled|disabled`). Use exact model IDs without the client prefix.",
+			Description: "Per-model overrides for reasoning efforts, context/input/output limits, modalities, and hosted search. Use exact model IDs without the client prefix.",
 		},
 	}
 }
@@ -436,7 +436,9 @@ func (m *Manager) handleModels() ([]byte, error) {
 				Object:                    "model",
 				OwnedBy:                   ProviderID,
 				DisplayName:               rec.DisplayName,
-				ContextLength:             rec.ContextLimit,
+				ContextLength:             rec.ClientContextLimit(),
+				InputTokenLimit:           rec.InputLimit,
+				OutputTokenLimit:          rec.OutputLimit,
 				MaxCompletionTokens:       rec.OutputLimit,
 				SupportedInputModalities:  rec.InputModes,
 				SupportedOutputModalities: rec.OutputModes,

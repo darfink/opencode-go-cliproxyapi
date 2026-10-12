@@ -1,5 +1,11 @@
 ## Local Model Enrichment
 
+- Add Go registry context limits, output limits, and text/image metadata for 36 exact model IDs, including hidden models.
+- Keep unverified Go limits unset. Do not copy deployment limits from other providers.
+- Add `input-token-limit`, `max-output-tokens`, `input-modalities`, and `output-modalities` configuration overrides.
+- Publish separate input/output limits and cap the client context ceiling at a smaller input limit.
+- Add exact routes for Claude Haiku 5.5, Space Bunny, and Step 5 Preview Free when discovery returns them.
+- Test metadata precedence, text-only models, and structured tools in streaming and non-streaming responses with offline mock clients.
 - Use a 1,048,576-token fallback for `muse-spark-1.3-contributor` when its catalog omits the context limit.
 - Preserve explicit provider limits and dynamic model discovery.
 - Consolidate reasoning efforts, context fallbacks, and hosted-search policy into one model-enrichment table.

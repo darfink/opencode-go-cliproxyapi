@@ -11,6 +11,10 @@ model-enrichments:
   custom-model:
     reasoning-efforts: [none, minimal, low, medium, high, xhigh, max, ultra, auto]
     context-window: 1048576
+    input-token-limit: 922000
+    max-output-tokens: 128000
+    input-modalities: [text, image]
+    output-modalities: [text]
     hosted-web-search: disabled
   another-model: {}
 `))
@@ -19,10 +23,13 @@ model-enrichments:
 	}
 	got := cfg.ModelEnrichments["custom-model"]
 	if got.ContextWindow == nil || *got.ContextWindow != 1_048_576 || got.HostedWebSearch == nil || *got.HostedWebSearch != HostedWebSearchDisabled ||
+		got.InputTokenLimit == nil || *got.InputTokenLimit != 922_000 || got.MaxOutputTokens == nil || *got.MaxOutputTokens != 128_000 ||
+		!reflect.DeepEqual(got.InputModalities, []string{"text", "image"}) || !reflect.DeepEqual(got.OutputModalities, []string{"text"}) ||
 		!reflect.DeepEqual(got.ReasoningEfforts, []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "auto"}) {
 		t.Fatalf("enrichment = %+v", got)
 	}
-	if got := cfg.ModelEnrichments["another-model"]; got.ContextWindow != nil || got.HostedWebSearch != nil || got.ReasoningEfforts != nil {
+	if got := cfg.ModelEnrichments["another-model"]; got.ContextWindow != nil || got.HostedWebSearch != nil || got.ReasoningEfforts != nil ||
+		got.InputTokenLimit != nil || got.MaxOutputTokens != nil || got.InputModalities != nil || got.OutputModalities != nil {
 		t.Fatalf("omitted fields did not inherit: %+v", got)
 	}
 }
@@ -34,6 +41,20 @@ func TestInvalidModelEnrichments(t *testing.T) {
 		`grok-4.7: {context-window: 0}`,
 		`grok-4.7: {context-window: -1}`,
 		`grok-4.7: {context-window: many}`,
+		`grok-4.7: {input-token-limit: 0}`,
+		`grok-4.7: {input-token-limit: -1}`,
+		`grok-4.7: {input-token-limit: many}`,
+		`grok-4.7: {max-output-tokens: 0}`,
+		`grok-4.7: {max-output-tokens: -1}`,
+		`grok-4.7: {max-output-tokens: many}`,
+		`grok-4.7: {input-modalities: []}`,
+		`grok-4.7: {input-modalities: [text, text]}`,
+		`grok-4.7: {input-modalities: [Image]}`,
+		`grok-4.7: {input-modalities: [bogus]}`,
+		`grok-4.7: {input-modalities: text}`,
+		`grok-4.7: {output-modalities: []}`,
+		`grok-4.7: {output-modalities: [text, text]}`,
+		`grok-4.7: {output-modalities: [bogus]}`,
 		`grok-4.7: {hosted-web-search: ""}`,
 		`grok-4.7: {hosted-web-search: preserve}`,
 		`grok-4.7: {hosted-web-search: true}`,

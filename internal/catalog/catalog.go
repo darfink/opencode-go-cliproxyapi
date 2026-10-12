@@ -67,6 +67,7 @@ type ModelRecord struct {
 	Protocol        Route
 	EndpointPath    string
 	ContextLimit    int64
+	InputLimit      int64
 	OutputLimit     int64
 	InputModes      []string
 	OutputModes     []string
@@ -96,6 +97,7 @@ type rawModel struct {
 	ID               string       `json:"id"`
 	DisplayName      string       `json:"display_name"`
 	ContextLength    int64        `json:"context_length"`
+	MaxInputTokens   int64        `json:"max_input_tokens"`
 	MaxOutputTokens  int64        `json:"max_output_tokens"`
 	InputModes       []string     `json:"input_modes"`
 	OutputModes      []string     `json:"output_modes"`
@@ -368,6 +370,10 @@ func (m *Manager) resolve(e rawModel) (Route, string, bool, string) {
 		// map lookup above is the only decision point here.
 		return Route(o.Protocol), o.Endpoint, true, fmt.Sprintf(
 			"model %q routed via user override (%s %s)", e.ID, o.Protocol, o.Endpoint)
+	}
+	// Exact declarations cover audited models outside the known family prefixes.
+	if enrichment, ok := modelEnrichments[e.ID]; ok {
+		return enrichment.route, "", true, ""
 	}
 	id := strings.ToLower(e.ID)
 	for _, p := range prefixRoutes {

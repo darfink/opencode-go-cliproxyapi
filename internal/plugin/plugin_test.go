@@ -467,8 +467,8 @@ func TestRegisterSuccessPublishesModels(t *testing.T) {
 		t.Fatalf("effective thinking policy not published: %+v", got.Thinking)
 	}
 	if got.ID != "opencode-go/glm-5.3" || got.Object != "model" || got.OwnedBy != ProviderID ||
-		got.DisplayName != "glm-5.3" || got.ContextLength != 0 || got.MaxCompletionTokens != 0 ||
-		len(got.SupportedInputModalities) != 0 || len(got.SupportedOutputModalities) != 0 {
+		got.DisplayName != "glm-5.3" || got.ContextLength != 1_000_000 || got.MaxCompletionTokens != 131_072 || got.OutputTokenLimit != 131_072 ||
+		strings.Join(got.SupportedInputModalities, ",") != "text" || strings.Join(got.SupportedOutputModalities, ",") != "text" {
 		t.Fatalf("model info = %+v", got)
 	}
 

@@ -157,7 +157,7 @@ func TestMuseContextLimitFallback(t *testing.T) {
 		{"explicit zero", `{"id":"muse-spark-1.3-contributor","context_length":0}`, 1_048_576},
 		{"provider limit wins", `{"id":"muse-spark-1.3-contributor","context_length":131072}`, 131_072},
 		{"unknown variant", `{"id":"muse-spark-future"}`, 0},
-		{"other provider", `{"id":"grok-4.7"}`, 0},
+		{"other provider", `{"id":"grok-4.7"}`, 500_000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fc := &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200,

@@ -128,7 +128,7 @@ plugins:
 | `request-timeout` | `duration` | `5m` | Upstream HTTP request timeout. Must be positive. |
 | `max-response-bytes` | `int64` | `67108864` (64 MiB) | Maximum non-streaming response body size in bytes. |
 | `allow-http` | `bool` | `false` | When `true`, permits `http://` scheme in `base-url` / `catalog-url` for local testing. |
-| `model-enrichments` | `object` | `{}` | Per-model overrides for reasoning efforts, context limits, and hosted-search policy. Use exact model IDs without the client-facing prefix. |
+| `model-enrichments` | `object` | `{}` | Per-model overrides for reasoning, token limits, modalities, and hosted search. Use exact model IDs without the client-facing prefix. |
 
 ### Model Enrichment
 
@@ -146,18 +146,37 @@ plugins:
           hosted-web-search: disabled
           # Optional; omitted fields inherit their existing values.
           # reasoning-efforts: [minimal, low, medium, high, xhigh]
+          # input-token-limit: 1048576
+          # max-output-tokens: 131072
+          # input-modalities: [text, image]
+          # output-modalities: [text]
 ```
 
 | Field | Values | Behavior |
 |-------|--------|----------|
 | `reasoning-efforts` | Nonempty list of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, or `auto` | Replaces advertised efforts. Retains provider budget limits. Does not guarantee that the provider accepts the configured efforts. |
 | `context-window` | Positive integer | Replaces the context limit published to clients. Does not change the provider's actual limit. |
+| `input-token-limit` | Positive integer | Sets the separate input limit. The published context ceiling cannot exceed this limit. |
+| `max-output-tokens` | Positive integer | Sets both published output limits. Does not rewrite requested output tokens or change the provider's actual limit. |
+| `input-modalities` | Nonempty list of `text`, `image`, `audio`, `video`, or `pdf` | Replaces advertised input modalities. Does not add media support to an adapter. |
+| `output-modalities` | Nonempty list of `text`, `image`, `audio`, `video`, or `pdf` | Replaces advertised output modalities. Does not add generation capabilities. |
 | `hosted-web-search` | `enabled` or `disabled` | `enabled` preserves requested hosted search on Responses routes. `disabled` removes hosted-search declarations, including follow-up declarations. Does not add tools or enable search on Chat/Messages routes. |
 
 The default hosted-search policy is `enabled`. Client-executed function tools, historical search results, and usage counters remain unchanged.
 The `auto` effort requires at least one named effort because budget conversion needs a named effort ladder.
 Requests that force a disabled hosted-search tool return an error before execution.
 The executor enforces this policy; Codex's `supports_search_tool` catalog flag controls tool discovery, not hosted web search.
+
+Built-in token limits and image support follow the `opencode-go` provider in [OpenCode's registry](https://models.opencode.ai/api.json), audited on 2026-10-12.
+These declarations also cover discovered models that clients hide.
+Models without an exact Go registry entry retain missing limits rather than inherit another provider's deployment limits.
+Built-in modality declarations include only text and supported images. Audio, video, and PDF transport require separate verification.
+
+The internal record retains the combined context window and the separate input limit.
+The published context ceiling uses the smaller positive limit because CLIProxyAPI's Codex catalog does not use separate input limits.
+For example, HY3 retains its 256,000-token combined window but publishes a 192,000-token client context ceiling.
+Output limits remain metadata. They do not reserve that entire amount for every request.
+All unit tests use offline mock clients. Plugin startup does not run tests or fetch the separate model registry.
 
 ### Distinct Reasoning Settings
 

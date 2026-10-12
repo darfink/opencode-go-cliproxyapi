@@ -65,6 +65,10 @@ const (
 type ModelEnrichment struct {
 	ReasoningEfforts []string               `yaml:"reasoning-efforts"`
 	ContextWindow    *int64                 `yaml:"context-window"`
+	InputTokenLimit  *int64                 `yaml:"input-token-limit"`
+	MaxOutputTokens  *int64                 `yaml:"max-output-tokens"`
+	InputModalities  []string               `yaml:"input-modalities"`
+	OutputModalities []string               `yaml:"output-modalities"`
 	HostedWebSearch  *HostedWebSearchPolicy `yaml:"hosted-web-search"`
 }
 
@@ -239,6 +243,26 @@ func (c Config) validate() error {
 		}
 		if enrichment.ContextWindow != nil && *enrichment.ContextWindow <= 0 {
 			return fmt.Errorf("model-enrichments[%s].context-window: must be positive", name)
+		}
+		for field, limit := range map[string]*int64{"input-token-limit": enrichment.InputTokenLimit, "max-output-tokens": enrichment.MaxOutputTokens} {
+			if limit != nil && *limit <= 0 {
+				return fmt.Errorf("model-enrichments[%s].%s: must be positive", name, field)
+			}
+		}
+		for field, modes := range map[string][]string{"input-modalities": enrichment.InputModalities, "output-modalities": enrichment.OutputModalities} {
+			if modes == nil {
+				continue
+			}
+			if len(modes) == 0 {
+				return fmt.Errorf("model-enrichments[%s].%s: must not be empty", name, field)
+			}
+			seenModes := make(map[string]bool)
+			for _, mode := range modes {
+				if !slices.Contains([]string{"text", "image", "audio", "video", "pdf"}, mode) || seenModes[mode] {
+					return fmt.Errorf("model-enrichments[%s].%s: unsupported or duplicate modality", name, field)
+				}
+				seenModes[mode] = true
+			}
 		}
 		if enrichment.HostedWebSearch != nil && *enrichment.HostedWebSearch != HostedWebSearchEnabled && *enrichment.HostedWebSearch != HostedWebSearchDisabled {
 			return fmt.Errorf("model-enrichments[%s].hosted-web-search: must be enabled or disabled", name)

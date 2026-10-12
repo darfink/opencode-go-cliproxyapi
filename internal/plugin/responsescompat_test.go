@@ -18,7 +18,7 @@ const namespaceRequest = `{"model":"opencode-go/glm-5.3","input":"Use exec","rea
 
 func TestExecuteCodexNamespaceTools(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		for _, model := range []string{"opencode-go/glm-5.3", "opencode-go/minimax-m3"} {
+		for _, model := range []string{"opencode-go/glm-5.3", "opencode-go/minimax-m3", "opencode-go/mimo-v2.6-pro", "opencode-go/mimo-v2.6-flash", "opencode-go/space-bunny", "opencode-go/step-5-preview-free", "opencode-go/claude-haiku-5-5"} {
 			t.Run(model+map[bool]string{false: "/non-stream", true: "/stream"}[stream], func(t *testing.T) {
 				var m *Manager
 				var f *fakeCaller
@@ -27,7 +27,7 @@ func TestExecuteCodexNamespaceTools(t *testing.T) {
 						`data: {"id":"r","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"functions__exec","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n",
 						"data: [DONE]\n\n",
 					}
-					if strings.Contains(model, "minimax") {
+					if strings.Contains(model, "minimax") || strings.Contains(model, "claude") {
 						frames = []string{
 							`data: {"type":"message_start","message":{"id":"r","usage":{"input_tokens":1}}}` + "\n\n",
 							`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"functions__exec"}}` + "\n\n",
@@ -45,6 +45,10 @@ func TestExecuteCodexNamespaceTools(t *testing.T) {
 						"/v1/messages":         `{"id":"r","content":[{"type":"tool_use","id":"call_1","name":"functions__exec","input":{}}],"stop_reason":"tool_use"}`,
 					}))
 				}
+				// Re-register against the discovered model, including exact routes
+				// without a family prefix. No live provider is involved.
+				f.responder = wrapWithCatalog(`{"data":[{"id":`+fmt.Sprintf("%q", strings.TrimPrefix(model, "opencode-go/"))+`}]}`, f.responder)
+				mustHandle(t, m, "plugin.register", lifecycleRequestBody(testValidYAML))
 				request := []byte(namespaceRequest)
 				method := "executor.execute"
 				payload := execReqBody(model, "openai-response", request, false)

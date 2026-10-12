@@ -2,6 +2,7 @@ package responsescompat
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -12,6 +13,73 @@ import (
 	"opencode-go-cliproxyapi/internal/catalog"
 	"opencode-go-cliproxyapi/internal/errclass"
 )
+
+func TestMiMoToolMarkupRemainsText(t *testing.T) {
+	const markup = `<tool_call><function=exec><parameter=cmd>echo hi</parameter></function></tool_call>`
+	for _, model := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", model, stream), func(t *testing.T) {
+				request := decodeObject(t, []byte(codexToolsRequest))
+				request["model"] = "opencode-go/" + model
+				original := encodeValue(t, request)
+				upstream, eErr := BuildRequest(catalog.RouteChatCompletions, model, original, nil)
+				if eErr != nil {
+					t.Fatal(eErr)
+				}
+				conv := New(catalog.RouteChatCompletions, model, original, upstream)
+				message := map[string]any{"role": "assistant", "content": markup}
+				choice := map[string]any{"index": 0, "message": message, "finish_reason": "stop"}
+				var payload []byte
+				if stream {
+					delete(choice, "message")
+					choice["delta"] = message
+					frames := append([]byte("data: "), encodeValue(t, map[string]any{"id": "r", "choices": []any{choice}})...)
+					frames = append(frames, []byte("\n\ndata: [DONE]\n\n")...)
+					events, done, err := conv.Feed(frames)
+					if err != nil || !done {
+						t.Fatalf("stream conversion: done=%t error=%v", done, err)
+					}
+					payload = bytes.Join(events, nil)
+				} else {
+					payload, eErr = conv.ConvertNonStream(http.StatusOK, encodeValue(t, map[string]any{"id": "r", "choices": []any{choice}}))
+					if eErr != nil {
+						t.Fatal(eErr)
+					}
+				}
+				// Model text is never promoted to executable calls by a parser.
+				if bytes.Contains(payload, []byte(`"type":"function_call"`)) {
+					t.Fatalf("text became an executable tool call: %s", payload)
+				}
+				var text string
+				if stream {
+					for _, line := range strings.Split(string(payload), "\n") {
+						if strings.HasPrefix(line, "data: ") {
+							var event struct{ Type, Delta string }
+							if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event); err == nil && event.Type == "response.output_text.delta" {
+								text += event.Delta
+							}
+						}
+					}
+				} else {
+					var response struct {
+						Output []struct{ Content []struct{ Text string } }
+					}
+					if err := json.Unmarshal(payload, &response); err != nil {
+						t.Fatal(err)
+					}
+					for _, item := range response.Output {
+						for _, part := range item.Content {
+							text += part.Text
+						}
+					}
+				}
+				if text != markup {
+					t.Fatalf("model text changed: %q", text)
+				}
+			})
+		}
+	}
+}
 
 func TestNonStreamToolRoundTrip(t *testing.T) {
 	for _, route := range []catalog.Route{catalog.RouteChatCompletions, catalog.RouteMessages} {

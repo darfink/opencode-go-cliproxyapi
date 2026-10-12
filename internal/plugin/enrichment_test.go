@@ -98,7 +98,7 @@ func TestExecuteModelEnrichmentSearchPolicyAndUsage(t *testing.T) {
 					}
 					var catalog pluginapi.ModelResponse
 					decodeResult(t, mustHandle(t, m, "model.static", nil), &catalog)
-					if catalog.Models[0].ContextLength != 1_048_576 || catalog.Models[1].ContextLength != 0 {
+					if catalog.Models[0].ContextLength != 1_048_576 || catalog.Models[1].ContextLength != 500_000 {
 						t.Fatalf("model context limits = %+v", catalog.Models)
 					}
 				})
@@ -142,6 +142,10 @@ model-enrichments:
   gpt-custom:
     reasoning-efforts: [none, ultra, auto]
     context-window: 131072
+    input-token-limit: 65536
+    max-output-tokens: 16384
+    input-modalities: [text]
+    output-modalities: [text]
     hosted-web-search: disabled
 `
 	decodeResult(t, mustHandle(t, m, "plugin.register", lifecycleRequestBody(cfg)), &registrationResult{})
@@ -151,8 +155,40 @@ model-enrichments:
 		t.Fatalf("published models = %+v", models)
 	}
 	got := models.Models[0]
-	if got.ID != "opencode-go/gpt-custom" || got.ContextLength != 131_072 || got.Thinking == nil ||
+	if got.ID != "opencode-go/gpt-custom" || got.ContextLength != 65_536 || got.InputTokenLimit != 65_536 ||
+		got.OutputTokenLimit != 16_384 || got.MaxCompletionTokens != 16_384 ||
+		!reflect.DeepEqual(got.SupportedInputModalities, []string{"text"}) || !reflect.DeepEqual(got.SupportedOutputModalities, []string{"text"}) || got.Thinking == nil ||
 		!reflect.DeepEqual(got.Thinking.Levels, []string{"none", "ultra", "auto"}) || got.Thinking.Max != 64000 {
 		t.Fatalf("published enrichment = %+v", got)
+	}
+}
+
+func TestModelEnrichmentPublishesBuiltinCapabilities(t *testing.T) {
+	m, _ := newTestManager(catalogResponder(true, `{"data":[{"id":"hy3"},{"id":"mimo-v2.6-pro"},{"id":"space-bunny"},{"id":"gpt-6-luna"},{"id":"claude-haiku-5-5"}]}`))
+	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
+	mustHandle(t, m, "plugin.register", lifecycleRequestBody(testValidYAML))
+	for _, method := range []string{"model.static", "model.for_auth"} {
+		var models pluginapi.ModelResponse
+		decodeResult(t, mustHandle(t, m, method, []byte(`{}`)), &models)
+		if len(models.Models) != 5 {
+			t.Fatalf("published models = %+v", models)
+		}
+		for i, tc := range []struct {
+			context, input, output int64
+			modes                  string
+		}{
+			{192_000, 192_000, 128_000, "text"},
+			{1_048_576, 0, 131_072, "text,image"},
+			{524_288, 524_288, 524_288, "text,image"},
+			{922_000, 922_000, 128_000, "text,image"},
+			{1_000_000, 0, 128_000, "text,image"},
+		} {
+			got := models.Models[i]
+			if got.ContextLength != tc.context || got.InputTokenLimit != tc.input || got.OutputTokenLimit != tc.output ||
+				got.MaxCompletionTokens != tc.output || strings.Join(got.SupportedInputModalities, ",") != tc.modes ||
+				strings.Join(got.SupportedOutputModalities, ",") != "text" {
+				t.Fatalf("%s published capabilities = %+v", method, got)
+			}
+		}
 	}
 }
